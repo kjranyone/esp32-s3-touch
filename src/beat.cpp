@@ -272,6 +272,8 @@ void flash_message(const char* msg, uint16_t frames)
     flash_frames = frames;
 }
 
+void request_full_restore() { full_restore_pending = true; }
+
 /* ---------------- 応答 (take_cutin は廃止: fb 直接描画) ---------------- */
 
 /* ---------------- スポーン ---------------- */
@@ -367,7 +369,7 @@ static void try_special(Actor& a)
     a.state = A_SPECIAL;
     a.timer = 40;
     freeze = 8;
-    special_flash = 10;
+    special_flash = 6;
     add_shake(4, 18);
     snprintf(cutin_name, sizeof(cutin_name), "%s - %s", ADEF[a.type].name, ADEF[a.type].special);
     cutin_draw = 50;
@@ -588,6 +590,10 @@ void step()
 
     if (shake > 0) shake--;
     if (flash_frames) flash_frames--;
+
+    /* 安全網: 定期的に背景全体を復元 (LVGL 側の予期せぬ上書きを自己修復) */
+    static uint16_t heal = 0;
+    if (++heal >= 120) { heal = 0; full_restore_pending = true; }
 }
 
 /* ---------------- 描画 ---------------- */
@@ -716,28 +722,28 @@ void render(uint16_t* fb)
         full_restore_pending = false;
     }
 
-    /* 消滅したアクタ・FX の前フレーム跡地を掃除 */
+    /* 消滅したアクタ・FX の前フレーム跡地を掃除 (揺れマージン +8px) */
     for (auto& e : enemies) {
         if (!e.alive && e.px != -9999) {
-            restore_rect(fb, e.px - 24, e.py - 64, 48, 70);
+            restore_rect(fb, e.px - 32, e.py - 72, 64, 80);
             e.px = -9999;
         }
     }
     for (auto& f : fxs) {
         if (!f.on && f.px != -9999) {
-            restore_rect(fb, f.px - 16, f.py - 18, 32, 48);
+            restore_rect(fb, f.px - 22, f.py - 26, 44, 56);
             f.px = -9999;
         }
     }
     /* 移動したアクタの前フレームを復元 */
     for (auto& a : allies) {
-        if (a.px != -9999) restore_rect(fb, a.px - 34, a.py - 64, 68, 70);
+        if (a.px != -9999) restore_rect(fb, a.px - 42, a.py - 72, 84, 84);
     }
     for (auto& e : enemies) {
-        if (e.alive && e.px != -9999) restore_rect(fb, e.px - 24, e.py - 64, 48, 70);
+        if (e.alive && e.px != -9999) restore_rect(fb, e.px - 32, e.py - 72, 64, 80);
     }
     for (auto& f : fxs) {
-        if (f.on && f.px != -9999) restore_rect(fb, f.px - 16, f.py - 18, 32, 48);
+        if (f.on && f.px != -9999) restore_rect(fb, f.px - 22, f.py - 26, 44, 56);
     }
 
     /* 描画 (y ソート, 画面振動オフセット付き) */

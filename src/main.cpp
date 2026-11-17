@@ -75,10 +75,12 @@ static void canvas_swipe_cb(lv_event_t* e)
         sw_x0 = p.x; sw_y0 = p.y; sw_dx = sw_dy = 0;
         sw_t0 = esp_timer_get_time();
         sw_active = true;
+        beat::request_full_restore();   /* タッチによる LVGL 再描画を次フレームで修復 */
     } else if (code == LV_EVENT_PRESSING && sw_active) {
         sw_dx = p.x - sw_x0; sw_dy = p.y - sw_y0;
     } else if (code == LV_EVENT_RELEASED && sw_active) {
         sw_active = false;
+        beat::request_full_restore();
         int64_t dt = (esp_timer_get_time() - sw_t0) / 1000;
         if (dt < 2000 && abs(sw_dy) > 60 && abs(sw_dy) > 2 * abs(sw_dx)) {
             game::pet_trigger();
@@ -110,6 +112,7 @@ static void open_skill_cb(lv_event_t* e)
         lv_obj_clear_flag(skill_panel, LV_OBJ_FLAG_HIDDEN);
     else
         lv_obj_add_flag(skill_panel, LV_OBJ_FLAG_HIDDEN);
+    beat::request_full_restore();   /* パネル開閉で壊れた領域を修復 */
 }
 
 static void close_skill_cb(lv_event_t* e)

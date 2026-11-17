@@ -37,4 +37,7 @@ float ally_rage(int i);     /* 必殺技ゲージ 0..100 */
 /* 画面内メッセージ (内蔵ミニフォントで fb に直接描画) */
 void flash_message(const char* msg, uint16_t frames);
 
+/* LVGL がゲーム領域を壊した (タッチ等) ときに呼ぶ: 次フレームで背景全体を復元 */
+void request_full_restore();
+
 } // namespace beat
