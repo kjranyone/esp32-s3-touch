@@ -77,6 +77,47 @@ static void draw_number(uint16_t* fb, int x, int y, int value, int scale, uint16
     }
 }
 
+/* 大文字英字 ('A'-'Z') + '-' + '!' */
+static const uint8_t LET[26][5] = {
+    {0x2,0x5,0x7,0x5,0x5},{0x6,0x5,0x6,0x5,0x6},{0x3,0x4,0x4,0x4,0x3},
+    {0x6,0x5,0x5,0x5,0x6},{0x7,0x4,0x6,0x4,0x7},{0x7,0x4,0x6,0x4,0x4},
+    {0x3,0x4,0x5,0x5,0x3},{0x5,0x5,0x7,0x5,0x5},{0x7,0x2,0x2,0x2,0x7},
+    {0x1,0x1,0x1,0x5,0x2},{0x5,0x5,0x6,0x5,0x5},{0x4,0x4,0x4,0x4,0x7},
+    {0x5,0x7,0x7,0x5,0x5},{0x6,0x5,0x5,0x5,0x5},{0x7,0x5,0x5,0x5,0x7},
+    {0x6,0x5,0x6,0x4,0x4},{0x3,0x4,0x5,0x5,0x3},{0x6,0x5,0x6,0x5,0x5},
+    {0x3,0x4,0x2,0x1,0x6},{0x7,0x2,0x2,0x2,0x2},{0x5,0x5,0x5,0x5,0x7},
+    {0x5,0x5,0x5,0x5,0x2},{0x5,0x5,0x7,0x7,0x5},{0x5,0x5,0x2,0x5,0x5},
+    {0x5,0x5,0x2,0x2,0x2},{0x7,0x1,0x2,0x4,0x7},
+};
+static const uint8_t GL_DASH[5] = {0x0,0x0,0x7,0x0,0x0};
+static const uint8_t GL_BANG[5] = {0x2,0x2,0x2,0x0,0x2};
+static const uint8_t GL_SPC[5]  = {0x0,0x0,0x0,0x0,0x0};
+
+static const uint8_t* glyph(char c)
+{
+    if (c >= '0' && c <= '9') return DIG[c - '0'];
+    if (c == '+') return DIG[10];
+    if (c >= 'A' && c <= 'Z') return LET[c - 'A'];
+    if (c == '-') return GL_DASH;
+    if (c == '!') return GL_BANG;
+    return GL_SPC;
+}
+static int draw_char(uint16_t* fb, int x, int y, char c, int scale, uint16_t col)
+{
+    const uint8_t* g = glyph(c);
+    for (int row = 0; row < 5; row++)
+        for (int col2 = 0; col2 < 3; col2++)
+            if (g[row] & (1 << (2 - col2)))
+                fill_rect(fb, x + col2 * scale, y + row * scale, scale, scale, col);
+    return 4 * scale;
+}
+static int draw_text(uint16_t* fb, int x, int y, const char* s, int scale, uint16_t col)
+{
+    for (const char* p = s; *p; p++) x += draw_char(fb, x, y, *p, scale, col);
+    return x;
+}
+static int text_w(const char* s, int scale) { return (int)strlen(s) * 4 * scale; }
+
 /* ---------------- アクタ ---------------- */
 enum AState : uint8_t { A_IDLE, A_WALK, A_WINDUP, A_RECOVER, A_HURT, A_DOWN, A_SPECIAL };
 enum EType : uint8_t { E_SLIME, E_BAT, E_GOLEM, E_BOSS };
@@ -115,7 +156,9 @@ static uint8_t special_flash = 0;
 static uint8_t shake = 0, shake_mag = 0;
 static uint32_t rngs = 13371;
 static char cutin_name[24];
-static volatile bool cutin_req = false;
+static uint16_t cutin_draw = 0;        /* カットイン表示残りフレーム */
+static char flash_msg_buf[24];
+static uint16_t flash_frames = 0;      /* 画面内メッセージ残りフレーム */
 static uint32_t frame = 0;
 
 struct Fx {
@@ -206,7 +249,7 @@ void init()
     full_restore_pending = true;   /* 初回は全体復元 */
     wave_n = 1; wave_timer = 60; wave_active = false;
     freeze = 0; special_flash = 0; shake = 0; shake_mag = 0;
-    cutin_req = false;
+    cutin_draw = 0; flash_frames = 0;
 }
 
 void refresh_player()
@@ -223,13 +266,13 @@ float ally_hp(int i) { return allies[i].hp; }
 float ally_hpmax(int i) { return allies[i].hpmax; }
 float ally_rage(int i) { return allies[i].rage; }
 
-bool take_cutin(char* name, size_t len)
+void flash_message(const char* msg, uint16_t frames)
 {
-    if (!cutin_req) return false;
-    cutin_req = false;
-    if (name) snprintf(name, len, "%s", cutin_name);
-    return true;
+    snprintf(flash_msg_buf, sizeof(flash_msg_buf), "%s", msg);
+    flash_frames = frames;
 }
+
+/* ---------------- 応答 (take_cutin は廃止: fb 直接描画) ---------------- */
 
 /* ---------------- スポーン ---------------- */
 static Actor* free_enemy()
@@ -327,7 +370,7 @@ static void try_special(Actor& a)
     special_flash = 10;
     add_shake(4, 18);
     snprintf(cutin_name, sizeof(cutin_name), "%s - %s", ADEF[a.type].name, ADEF[a.type].special);
-    cutin_req = true;
+    cutin_draw = 50;
 
     const AllyDef& d = ADEF[a.type];
     float dmg = d.dmg * gp::g.dmg_pct / 100.0f;
@@ -544,6 +587,7 @@ void step()
     else start_wave();
 
     if (shake > 0) shake--;
+    if (flash_frames) flash_frames--;
 }
 
 /* ---------------- 描画 ---------------- */
@@ -732,6 +776,24 @@ void render(uint16_t* fb)
         draw_fx(fb, f);
         f.x = wx; f.y = wy;
         f.px = (int16_t)f.x; f.py = (int16_t)f.y;
+    }
+
+    /* 必殺技カットイン (fb に直接描画。LVGL は介在しない) */
+    if (cutin_draw > 0) {
+        uint16_t band = RGB(0x1C, 0x2A, 0x50);
+        fill_rect(fb, 0, 96, FB_W, 30, band);
+        fill_rect(fb, 0, 226, FB_W, 30, band);
+        fill_rect(fb, 0, 96, FB_W, 2, C_WHITE);
+        fill_rect(fb, 0, 254, FB_W, 2, C_WHITE);
+        int w = text_w(cutin_name, 3);
+        draw_text(fb, (FB_W - w) / 2, 148, cutin_name, 3, C_WHITE);
+        cutin_draw--;
+    }
+
+    /* 画面内メッセージ */
+    if (flash_frames > 0 && flash_msg_buf[0]) {
+        int w = text_w(flash_msg_buf, 2);
+        draw_text(fb, (FB_W - w) / 2, 66, flash_msg_buf, 2, RGB(0xFF, 0x9A, 0xB8));
     }
 }
 

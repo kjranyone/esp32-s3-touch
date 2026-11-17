@@ -34,7 +34,7 @@ float ally_hp(int i);
 float ally_hpmax(int i);
 float ally_rage(int i);     /* 必殺技ゲージ 0..100 */
 
-/* 必殺技カットイン要求 (1 回だけ受け取る)。発動したキャラ名を返す */
-bool take_cutin(char* name, size_t len);
+/* 画面内メッセージ (内蔵ミニフォントで fb に直接描画) */
+void flash_message(const char* msg, uint16_t frames);
 
 } // namespace beat

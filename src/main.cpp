@@ -37,9 +37,6 @@ static lv_obj_t* skill_panel = nullptr;
 static lv_obj_t* node_btns[game::SKILL_N];
 static lv_obj_t* node_sub[game::SKILL_N];
 static lv_obj_t* gauge_bars[beat::ALLY_N];
-static lv_obj_t* cutin_bands[2];
-static lv_obj_t* cutin_label = nullptr;
-static uint32_t cutin_until = 0;
 
 /* なでなでジェスチャ */
 static int16_t sw_x0 = 0, sw_y0 = 0, sw_dx = 0, sw_dy = 0;
@@ -54,14 +51,8 @@ static volatile uint32_t pend_wave = 0;
 static volatile bool pend_save = false;
 static volatile bool pend_heal = false;
 
-/* なでなでポップアップ */
-static lv_obj_t* pet_pop = nullptr;
-static uint32_t pet_pop_until = 0;
-static uint32_t frame_n = 0;
-
-/* フレーム統計 */
-static uint32_t frame_count = 0;
-static int64_t fps_t0 = 0, last_tick_t = 0;
+/* なでなでポップアップは fb 直接描画 (beat::flash_message) */
+static uint32_t frame_count = 0;static int64_t fps_t0 = 0, last_tick_t = 0;
 static uint32_t fps_value = 0;
 static uint32_t hud_div = 0, save_div = 0, report_div = 0;
 /* プロファイリング (us) */
@@ -91,12 +82,9 @@ static void canvas_swipe_cb(lv_event_t* e)
         int64_t dt = (esp_timer_get_time() - sw_t0) / 1000;
         if (dt < 2000 && abs(sw_dy) > 60 && abs(sw_dy) > 2 * abs(sw_dx)) {
             game::pet_trigger();
-            if (pet_pop) {
-                lv_label_set_text_fmt(pet_pop, "PET! +%d%%", (int)gp::g.pet_buff_pct);
-                lv_obj_clear_flag(pet_pop, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_set_pos(pet_pop, 200, 90);
-                pet_pop_until = frame_n + 45;
-            }
+            char msg[24];
+            snprintf(msg, sizeof(msg), "PET! +%d%%", (int)gp::g.pet_buff_pct);
+            beat::flash_message(msg, 45);
         }
     }
 }
@@ -210,32 +198,13 @@ static void tick_cb(lv_timer_t* timer)
         game::st.wave_reached = pend_wave;
         pend_wave = 0;
     }
-    frame_n++;
-    if (pet_pop && pet_pop_until && frame_n >= pet_pop_until) {
-        lv_obj_add_flag(pet_pop, LV_OBJ_FLAG_HIDDEN);
-        pet_pop_until = 0;
-    }
-
-    /* 必殺技カットイン要求 */
-    char cbuf[32];
-    if (beat::take_cutin(cbuf, sizeof(cbuf))) {
-        lv_label_set_text(cutin_label, cbuf);
-        for (auto& b : cutin_bands) lv_obj_clear_flag(b, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(cutin_label, LV_OBJ_FLAG_HIDDEN);
-        cutin_until = frame_n + 50;
-    }
-    if (cutin_until && frame_n >= cutin_until) {
-        for (auto& b : cutin_bands) lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(cutin_label, LV_OBJ_FLAG_HIDDEN);
-        cutin_until = 0;
-    }
 
     /* ゲーム進行 */
     int64_t t0 = esp_timer_get_time();
     game::tick(dt);
     beat::step();
     int64_t t1 = esp_timer_get_time();
-    beat::render(game_fb);
+    beat::render(game_fb + 56);   /* ゲーム領域はパネル行 56..407 (HUD 分をオフセット) */
     int64_t t2 = esp_timer_get_time();
     prof_step += (t1 - t0);
     prof_render += (t2 - t1);
@@ -390,22 +359,7 @@ static void build_ui()
         node_btns[i] = b;
     }
 
-    /* なでなでポップアップ (canvas 上) */
-    pet_pop = make_label(scr, "", 200, 90, 20, 0xFF9AB8);
-    lv_obj_add_flag(pet_pop, LV_OBJ_FLAG_HIDDEN);
-
-    /* --- 必殺技カットイン (帯×2 + 技名) --- */
-    for (int i = 0; i < 2; i++) {
-        cutin_bands[i] = lv_obj_create(scr);
-        lv_obj_remove_style_all(cutin_bands[i]);
-        lv_obj_set_size(cutin_bands[i], 480, 34);
-        lv_obj_set_pos(cutin_bands[i], 0, i == 0 ? 118 : 224);
-        lv_obj_set_style_bg_color(cutin_bands[i], lv_color_hex(0x1C2A50), 0);
-        lv_obj_set_style_bg_opa(cutin_bands[i], LV_OPA_80, 0);
-        lv_obj_add_flag(cutin_bands[i], LV_OBJ_FLAG_HIDDEN);
-    }
-    cutin_label = make_label(scr, "", 40, 148, 30, 0xFFFFFF);
-    lv_obj_add_flag(cutin_label, LV_OBJ_FLAG_HIDDEN);
+    /* なでなでポップアップとカットインは fb 直接描画 (beat 側) */
 
     /* --- フレームタイマ (60fps キャップ, 重いときは自動で落ちる) --- */
     lv_timer_create(tick_cb, 16, NULL);
