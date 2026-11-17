@@ -1,38 +1,40 @@
 /**
- * beat.h — ベルトスクロール戦闘エンジン (Phase 1')
- * 『ルミの水晶庭園』v3
+ * beat.h — オートバトルエンジン (v3.1)
+ * 『ルミの水晶庭園』: 見て楽しむ、放置系オートバトラー
  *
- * - 仮想パッド + ATK/DASH ボタン入力 (main.cpp から渡す)
- * - 3 段コンボ / ヒットストップ / ヒットフラッシュ / ノックバック / 画面振動
- * - ダメージ数字 (内蔵 3x5 ミニフォント) / 敵 AI 3 種 + ボス / ウェーブ管理
- * - 描画は 480x352 RGB565 フレームバッファへ直接 (スプライトはプレースホルダ図形)
+ * - 味方 3 ユニット (LUMI/MIRA/GORO) が AI で自動戦闘
+ * - 攻撃モーション: 構え(WINDUP)→攻撃(STRIKE)→フォロースルー(RECOVER) (#モーション)
+ * - 必殺技: レイジゲージ満タンで条件発動。カットイン+明暗フラッシュ+ヒットストップ+大画面振動
+ * - 弾 (遠距離攻撃) / ダメージ数字 / ヒットマーク / ウェーブ管理
  */
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
 
 namespace beat {
 
 constexpr int FB_W = 480;
 constexpr int FB_H = 352;
-constexpr float WORLD_W = 2400.0f;
-constexpr float BELT_Y0 = 120.0f;   /* 歩行帯 (canvas 座標) */
+constexpr float BELT_Y0 = 120.0f;
 constexpr float BELT_Y1 = 320.0f;
 
-struct Pad {
-    float dx, dy;        /* -1..1 (仮想パッド) */
-    bool atk;            /* 1 回押し (main が立てて step が消す) */
-    bool dash;
-};
-extern Pad pad;
+constexpr int ALLY_N = 3;   /* LUMI, MIRA, GORO */
+constexpr int ENEMY_N = 8;
 
 void init();
 void step();
 void render(uint16_t* fb);
-void refresh_player();       /* スキル購入後に HP 上限などを再計算 */
+void refresh_player();      /* スキル購入後に味方 HP 等を再計算 */
 void set_wave(uint32_t w);
 uint32_t wave();
-float player_hp();           /* HUD 表示用 */
-float player_hpmax();
-void heal_player();          /* シリアルデバッグ用 */
+void heal_all();
+
+/* HUD 用 */
+float ally_hp(int i);
+float ally_hpmax(int i);
+float ally_rage(int i);     /* 必殺技ゲージ 0..100 */
+
+/* 必殺技カットイン要求 (1 回だけ受け取る)。発動したキャラ名を返す */
+bool take_cutin(char* name, size_t len);
 
 } // namespace beat

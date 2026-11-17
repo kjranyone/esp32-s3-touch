@@ -10,7 +10,7 @@ namespace gp {
 Params g = {
     /* .dmg_pct          */ 100,
     /* .move_pct         */ 100,
-    /* .reach_pct        */ 100,
+    /* .rage_pct         */ 100,
     /* .hp_pct           */ 100,
     /* .idle_x10         */ 5,     /* 0.5/s */
     /* .pet_buff_pct     */ 10,
@@ -21,7 +21,7 @@ struct Entry { const char* key; uint32_t* value; };
 static const Entry TABLE[] = {
     {"dmg_pct",   &g.dmg_pct},
     {"move_pct",  &g.move_pct},
-    {"reach_pct", &g.reach_pct},
+    {"rage_pct",  &g.rage_pct},
     {"hp_pct",    &g.hp_pct},
     {"idle_x10",  &g.idle_x10},
     {"pet_buff",  &g.pet_buff_pct},

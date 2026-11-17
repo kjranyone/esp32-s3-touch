@@ -17,7 +17,7 @@ struct Params {
     /* 戦闘 (スキルで強化される基礎値) */
     uint32_t dmg_pct;          /* ダメージ倍率 (%) */
     uint32_t move_pct;         /* 移動速度倍率 (%) */
-    uint32_t reach_pct;        /* 攻撃射程倍率 (%) */
+    uint32_t rage_pct;         /* 必殺技ゲージ蓄積倍率 (%) */
     uint32_t hp_pct;           /* 最大HP倍率 (%) */
 
     /* 放置収入 */

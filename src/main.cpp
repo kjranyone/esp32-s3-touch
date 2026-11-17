@@ -22,9 +22,12 @@
 using namespace esp_panel::drivers;
 using namespace esp_panel::board;
 
+/* パネルへ直接描画するためのハンドル (LVGL を経由しない) */
+static esp_panel::drivers::LCD* g_lcd = nullptr;
+
 /* ================= UI ハンドル ================= */
 static lv_obj_t* canvas_obj = nullptr;
-static uint16_t* canvas_buf = nullptr;
+static uint16_t* game_fb = nullptr;   /* パネルのフレームバッファ (直接描画) */
 static lv_obj_t* hp_bar = nullptr;
 static lv_obj_t* crystals_label = nullptr;
 static lv_obj_t* wave_label = nullptr;
@@ -33,6 +36,10 @@ static lv_obj_t* pet_label = nullptr;
 static lv_obj_t* skill_panel = nullptr;
 static lv_obj_t* node_btns[game::SKILL_N];
 static lv_obj_t* node_sub[game::SKILL_N];
+static lv_obj_t* gauge_bars[beat::ALLY_N];
+static lv_obj_t* cutin_bands[2];
+static lv_obj_t* cutin_label = nullptr;
+static uint32_t cutin_until = 0;
 
 /* なでなでジェスチャ */
 static int16_t sw_x0 = 0, sw_y0 = 0, sw_dx = 0, sw_dy = 0;
@@ -57,30 +64,13 @@ static uint32_t frame_count = 0;
 static int64_t fps_t0 = 0, last_tick_t = 0;
 static uint32_t fps_value = 0;
 static uint32_t hud_div = 0, save_div = 0, report_div = 0;
+/* プロファイリング (us) */
+static int64_t prof_step = 0, prof_render = 0;
+static uint32_t prof_frames = 0;
 
 static char fmt_buf[2][24];
 
 /* ================= イベント ================= */
-static void pad_cb(lv_event_t* e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_RELEASED) { beat::pad.dx = beat::pad.dy = 0; return; }
-    if (code != LV_EVENT_PRESSING) return;
-    lv_indev_t* indev = lv_indev_get_act();
-    if (!indev) return;
-    lv_point_t p;
-    lv_indev_get_point(indev, &p);
-    float dx = (p.x - 83) / 55.0f, dy = (p.y - 443) / 28.0f;
-    if (dx > 1) dx = 1; if (dx < -1) dx = -1;
-    if (dy > 1) dy = 1; if (dy < -1) dy = -1;
-    if (fabsf(dx) < 0.15f) dx = 0;
-    if (fabsf(dy) < 0.15f) dy = 0;
-    beat::pad.dx = dx; beat::pad.dy = dy;
-}
-
-static void atk_cb(lv_event_t* e) { (void)e; beat::pad.atk = true; }
-static void dash_cb(lv_event_t* e) { (void)e; beat::pad.dash = true; }
-
 /* キャンバスの縦スワイプ = なでなで (#104 反応必須) */
 static void canvas_swipe_cb(lv_event_t* e)
 {
@@ -166,9 +156,13 @@ static void refresh_skill_panel()
 
 static void refresh_hud()
 {
-    /* HP バー */
-    float hp = beat::player_hp(), hpmax = beat::player_hpmax();
+    /* HP バー (LUMI) */
+    float hp = beat::ally_hp(0), hpmax = beat::ally_hpmax(0);
     if (hpmax > 0) lv_bar_set_value(hp_bar, hp / hpmax * 100.0f, LV_ANIM_OFF);
+
+    /* 必殺技ゲージ (#023: 目の前に吊るす) */
+    for (int i = 0; i < beat::ALLY_N; i++)
+        lv_bar_set_value(gauge_bars[i], beat::ally_rage(i), LV_ANIM_OFF);
 
     /* クリスタル + 放置収入 */
     game::fmt(game::st.crystals, fmt_buf[0], 24);
@@ -209,7 +203,7 @@ static void tick_cb(lv_timer_t* timer)
         else Serial.println("[skill] cannot buy");
     }
     if (pend_wave) { pend_wave = 0; }
-    if (pend_heal) { pend_heal = false; beat::heal_player(); }
+    if (pend_heal) { pend_heal = false; beat::heal_all(); }
     if (pend_save) { pend_save = false; game::save(); Serial.println("[game] saved"); }
     if (pend_wave) {
         beat::set_wave(pend_wave);
@@ -222,11 +216,30 @@ static void tick_cb(lv_timer_t* timer)
         pet_pop_until = 0;
     }
 
+    /* 必殺技カットイン要求 */
+    char cbuf[32];
+    if (beat::take_cutin(cbuf, sizeof(cbuf))) {
+        lv_label_set_text(cutin_label, cbuf);
+        for (auto& b : cutin_bands) lv_obj_clear_flag(b, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(cutin_label, LV_OBJ_FLAG_HIDDEN);
+        cutin_until = frame_n + 50;
+    }
+    if (cutin_until && frame_n >= cutin_until) {
+        for (auto& b : cutin_bands) lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(cutin_label, LV_OBJ_FLAG_HIDDEN);
+        cutin_until = 0;
+    }
+
     /* ゲーム進行 */
+    int64_t t0 = esp_timer_get_time();
     game::tick(dt);
     beat::step();
-    beat::render(canvas_buf);
-    lv_obj_invalidate(canvas_obj);
+    int64_t t1 = esp_timer_get_time();
+    beat::render(game_fb);
+    int64_t t2 = esp_timer_get_time();
+    prof_step += (t1 - t0);
+    prof_render += (t2 - t1);
+    prof_frames++;
 
     /* FPS */
     frame_count++;
@@ -236,19 +249,27 @@ static void tick_cb(lv_timer_t* timer)
         frame_count = 0; fps_t0 = now;
     }
 
-    /* HUD (1Hz) */
-    if (++hud_div >= 30) { hud_div = 0; refresh_hud(); }
+    /* HUD (1s @60fps) */
+    if (++hud_div >= 60) { hud_div = 0; refresh_hud(); }
 
     /* オートセーブ (30s) */
-    if (++save_div >= 900) { save_div = 0; game::save(); }
+    if (++save_div >= 1800) { save_div = 0; game::save(); }
 
-    /* シリアルステータス (10s) */
-    if (++report_div >= 600) {
-        report_div = 0;
+    /* シリアルステータス (実時間 10s) */
+    static int64_t last_report_t = 0;
+    if (last_report_t == 0) last_report_t = now;
+    if (now - last_report_t >= 10000000LL) {
+        last_report_t = now;
         game::fmt(game::st.crystals, fmt_buf[0], 24);
-        Serial.printf("[beat] fps=%u wave=%u crystals=%s hp=%.0f/%.0f\r\n",
+        Serial.printf("[beat] fps=%u wave=%u crystals=%s lumiHP=%.0f rage=%.0f/%.0f/%.0f\r\n",
                       (unsigned)fps_value, (unsigned)beat::wave(), fmt_buf[0],
-                      beat::player_hp(), beat::player_hpmax());
+                      beat::ally_hp(0), beat::ally_rage(0), beat::ally_rage(1), beat::ally_rage(2));
+        Serial.printf("[prof] step=%ldus render=%ldus fps=%ld\r\n",
+                      (long)(prof_step / (prof_frames ? prof_frames : 1)),
+                      (long)(prof_render / (prof_frames ? prof_frames : 1)),
+                      (long)fps_value);
+        prof_step = prof_render = 0;
+        prof_frames = 0;
     }
 }
 
@@ -297,49 +318,34 @@ static void build_ui()
     lv_label_set_text(sl, "SKILL");
     lv_obj_center(sl);
 
-    /* --- ゲームキャンバス (y 56..407) --- */
-    canvas_buf = (uint16_t*)heap_caps_calloc(beat::FB_W * beat::FB_H,
-                                             sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-    assert(canvas_buf);
-    canvas_obj = lv_canvas_create(scr);
-    lv_canvas_set_buffer(canvas_obj, canvas_buf, beat::FB_W, beat::FB_H, LV_IMG_CF_TRUE_COLOR);
+    /* --- ゲームはパネルのフレームバッファへ直接描画 (ゼロコピー) --- */
+    game_fb = (uint16_t*)g_lcd->getFrameBufferByIndex(0);
+    assert(game_fb);
+    canvas_obj = lv_obj_create(scr);
+    lv_obj_remove_style_all(canvas_obj);
     lv_obj_set_pos(canvas_obj, 0, 56);
+    lv_obj_set_size(canvas_obj, 480, 352);
     lv_obj_clear_flag(canvas_obj, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(canvas_obj, canvas_swipe_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(canvas_obj, canvas_swipe_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(canvas_obj, canvas_swipe_cb, LV_EVENT_RELEASED, NULL);
 
-    /* --- 仮想パッド (y 408..479) --- */
-    lv_obj_t* pad_zone = lv_obj_create(scr);
-    lv_obj_set_style_bg_color(pad_zone, lv_color_hex(0x222230), 0);
-    lv_obj_set_style_bg_opa(pad_zone, LV_OPA_50, 0);
-    lv_obj_set_style_radius(pad_zone, 36, 0);
-    lv_obj_set_pos(pad_zone, 8, 408);
-    lv_obj_set_size(pad_zone, 150, 68);
-    lv_obj_add_event_cb(pad_zone, pad_cb, LV_EVENT_PRESSED, NULL);
-    lv_obj_add_event_cb(pad_zone, pad_cb, LV_EVENT_PRESSING, NULL);
-    lv_obj_add_event_cb(pad_zone, pad_cb, LV_EVENT_RELEASED, NULL);
-    lv_obj_clear_flag(pad_zone, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t* pl = lv_label_create(pad_zone);
-    lv_label_set_text(pl, LV_SYMBOL_LEFT "  " LV_SYMBOL_RIGHT);
-    lv_obj_center(pl);
-
-    /* --- ATK / DASH ボタン --- */
-    lv_obj_t* atk = lv_btn_create(scr);
-    lv_obj_set_pos(atk, 330, 412);
-    lv_obj_set_size(atk, 140, 60);
-    lv_obj_add_event_cb(atk, atk_cb, LV_EVENT_PRESSED, NULL);
-    lv_obj_t* al = lv_label_create(atk);
-    lv_label_set_text(al, "ATK");
-    lv_obj_center(al);
-
-    lv_obj_t* dash = lv_btn_create(scr);
-    lv_obj_set_pos(dash, 200, 418);
-    lv_obj_set_size(dash, 100, 48);
-    lv_obj_add_event_cb(dash, dash_cb, LV_EVENT_PRESSED, NULL);
-    lv_obj_t* dl = lv_label_create(dash);
-    lv_label_set_text(dl, "DASH");
-    lv_obj_center(dl);
+    /* --- 操作 UI なし (オートバトル観戦)。下部は必殺ゲージ表示 --- */
+    make_label(scr, "SPECIAL GAUGES", 8, 412, 8, 0x8090A8);
+    for (int i = 0; i < beat::ALLY_N; i++) {
+        lv_obj_t* gb = lv_bar_create(scr);
+        lv_obj_set_pos(gb, 8 + i * 150, 424);
+        lv_obj_set_size(gb, 140, 22);
+        lv_bar_set_range(gb, 0, 100);
+        lv_bar_set_value(gb, 0, LV_ANIM_OFF);
+        uint32_t col = (i == 0) ? 0x70D8E8 : (i == 1) ? 0x9C6CD8 : 0xD8A850;
+        lv_obj_set_style_bg_color(gb, lv_color_hex(0x181820), 0);
+        lv_obj_set_style_bg_color(gb, lv_color_hex(col), LV_PART_INDICATOR);
+        gauge_bars[i] = gb;
+    }
+    make_label(scr, "LUMI", 10, 450, 8, 0x70D8E8);
+    make_label(scr, "MIRA", 160, 450, 8, 0x9C6CD8);
+    make_label(scr, "GORO", 310, 450, 8, 0xD8A850);
 
     /* --- スキルパネル (オーバーレイ, 戦闘は裏で継続 = 放置) --- */
     skill_panel = lv_obj_create(scr);
@@ -388,8 +394,21 @@ static void build_ui()
     pet_pop = make_label(scr, "", 200, 90, 20, 0xFF9AB8);
     lv_obj_add_flag(pet_pop, LV_OBJ_FLAG_HIDDEN);
 
-    /* --- 物理フレームタイマ (約30fps) --- */
-    lv_timer_create(tick_cb, 33, NULL);
+    /* --- 必殺技カットイン (帯×2 + 技名) --- */
+    for (int i = 0; i < 2; i++) {
+        cutin_bands[i] = lv_obj_create(scr);
+        lv_obj_remove_style_all(cutin_bands[i]);
+        lv_obj_set_size(cutin_bands[i], 480, 34);
+        lv_obj_set_pos(cutin_bands[i], 0, i == 0 ? 118 : 224);
+        lv_obj_set_style_bg_color(cutin_bands[i], lv_color_hex(0x1C2A50), 0);
+        lv_obj_set_style_bg_opa(cutin_bands[i], LV_OPA_80, 0);
+        lv_obj_add_flag(cutin_bands[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    cutin_label = make_label(scr, "", 40, 148, 30, 0xFFFFFF);
+    lv_obj_add_flag(cutin_label, LV_OBJ_FLAG_HIDDEN);
+
+    /* --- フレームタイマ (60fps キャップ, 重いときは自動で落ちる) --- */
+    lv_timer_create(tick_cb, 16, NULL);
 }
 
 /* ================= シリアル調整コンソール ================= */
@@ -451,6 +470,7 @@ void setup()
     Board* board = new Board();
     board->init();
     assert(board->begin());
+    g_lcd = board->getLCD();
 
     Serial.println("Initializing LVGL");
     lvgl_port_init(board->getLCD(), board->getTouch());

@@ -16,7 +16,7 @@ const SkillDef SKILLS[SKILL_N] = {
     /* 1 */ {"ATK++",  20000.0,   0},  /* ダメージ x1.3 */
     /* 2 */ {"SPD+",   2000.0,   -1},  /* 移動 x1.3 */
     /* 3 */ {"SPD++",  50000.0,   2},  /* 移動 x1.3 */
-    /* 4 */ {"RNG+",   30000.0,   0},  /* 射程 x1.4 */
+    /* 4 */ {"RAGE+",   30000.0,   0},  /* 必殺ゲージ蓄積 x1.4 */
     /* 5 */ {"HP+",    5000.0,   -1},  /* 最大HP x2 */
     /* 6 */ {"IDLE+",  200000.0,  5},  /* 放置収入 x2 */
     /* 7 */ {"PET+",   3000.0,   -1},  /* なでなでバフ +15% */
@@ -61,7 +61,7 @@ static void apply_skill_effects()
 {
     gp::g.dmg_pct   = 100;
     gp::g.move_pct  = 100;
-    gp::g.reach_pct = 100;
+    gp::g.rage_pct  = 100;
     gp::g.hp_pct    = 100;
     gp::g.idle_x10  = 5;
     gp::g.pet_buff_pct = 10;
@@ -72,7 +72,7 @@ static void apply_skill_effects()
     if (st.owned[1]) gp::g.dmg_pct   = (uint32_t)(gp::g.dmg_pct   * 1.30);
     if (st.owned[2]) gp::g.move_pct  = (uint32_t)(gp::g.move_pct  * 1.30);
     if (st.owned[3]) gp::g.move_pct  = (uint32_t)(gp::g.move_pct  * 1.30);
-    if (st.owned[4]) gp::g.reach_pct = (uint32_t)(gp::g.reach_pct * 1.40);
+    if (st.owned[4]) gp::g.rage_pct  = (uint32_t)(gp::g.rage_pct  * 1.40);
     if (st.owned[5]) gp::g.hp_pct    = (uint32_t)(gp::g.hp_pct    * 2);
     if (st.owned[6]) { gp::g.idle_x10 *= 2; s_idle_mult *= 2.0; }
     if (st.owned[7]) gp::g.pet_buff_pct += 15;
