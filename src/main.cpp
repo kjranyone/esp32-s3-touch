@@ -382,6 +382,7 @@ static void handle_command(char* line)
         return;
     }
     if (strcmp(line, "reset") == 0) { beat::init(); Serial.println("[cmd] battle reset"); return; }
+    if (strcmp(line, "dump") == 0)  { beat::dump(); return; }
     if (strncmp(line, "give ", 5) == 0)   { pend_give = atof(line + 5); pend_give_on = true; return; }
     if (strncmp(line, "buyskill ", 9) == 0){ pend_skill = atoi(line + 9); return; }
     if (strncmp(line, "wave ", 5) == 0)   { pend_wave = (uint32_t)atoi(line + 5); return; }

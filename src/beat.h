@@ -40,4 +40,7 @@ void flash_message(const char* msg, uint16_t frames);
 /* LVGL がゲーム領域を壊した (タッチ等) ときに呼ぶ: 次フレームで背景全体を復元 */
 void request_full_restore();
 
+/* デバッグ: 全アクタの座標を出力 */
+void dump();
+
 } // namespace beat

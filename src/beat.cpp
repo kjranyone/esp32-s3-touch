@@ -10,6 +10,7 @@
 #include "beat.h"
 #include "game_params.h"
 #include "garden_game.h"
+#include <Arduino.h>
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -139,6 +140,7 @@ struct Actor {
     float rage = 0;              /* 必殺技ゲージ 0..100 (味方のみ) */
     float home_x = 0;
     float wander_t = 0;
+    uint8_t spawn_t = 0;         /* 出現演出中 (点滅, 行動停止) */
     int16_t px = -9999, py = -9999;   /* 前フレーム描画位置 (ダーティ矩形) */
 };
 
@@ -192,9 +194,14 @@ static inline float frand(float a, float b) { return a + (rnd() % 1000) / 1000.0
 
 static void add_fx(float x, float y, int8_t kind, int32_t v, int16_t life)
 {
-    Fx& f = fxs[fx_i];
-    fx_i = (fx_i + 1) % 20;
-    f = { true, x, y, 0, kind, life, v, 0, 0 };
+    /* 空きスロットを探す (生きている FX を上書きしてワープさせない) */
+    Fx* slot = nullptr;
+    for (auto& f : fxs) if (!f.on) { slot = &f; break; }
+    if (!slot) { slot = &fxs[fx_i]; fx_i = (fx_i + 1) % 20; }
+    *slot = Fx();
+    slot->on = true;
+    slot->x = x; slot->y = y;
+    slot->kind = kind; slot->life = life; slot->v = v;
 }
 static void add_shake(uint8_t mag, uint8_t frames)
 {
@@ -274,6 +281,20 @@ void flash_message(const char* msg, uint16_t frames)
 
 void request_full_restore() { full_restore_pending = true; }
 
+void dump()
+{
+    Serial.println("[dump] --- allies ---");
+    for (auto& a : allies)
+        Serial.printf("  %-5s x=%.0f y=%.0f hp=%.0f/%.0f st=%u rage=%.0f\r\n",
+                      ADEF[a.type].name, a.x, a.y, a.hp, a.hpmax, a.state, a.rage);
+    Serial.println("[dump] --- enemies ---");
+    for (auto& e : enemies) {
+        if (!e.alive) continue;
+        Serial.printf("  type%u x=%.0f y=%.0f hp=%.0f st=%u spawn=%u px=%d\r\n",
+                      e.type, e.x, e.y, e.hp, e.state, e.spawn_t, e.px);
+    }
+}
+
 /* ---------------- 応答 (take_cutin は廃止: fb 直接描画) ---------------- */
 
 /* ---------------- スポーン ---------------- */
@@ -300,6 +321,7 @@ static void spawn_enemy(int type)
     e->y = frand(BELT_Y0 + 10, BELT_Y1 - 10);
     e->hpmax = hpmax; e->hp = hpmax;
     e->dir = -1; e->state = A_WALK;
+    e->spawn_t = 24;                 /* 出現演出 (点滅しながら歩いて入場) */
     if (type == E_BOSS) add_fx(e->x - 30, e->y - 44, 3, 0, 90);
 }
 
@@ -434,11 +456,18 @@ static void ally_step(Actor& a)
                 }
                 a.combo = (st + 1) % 3;
             } else if (d.atktype == 1 && t) {                /* MIRA: 追尾弾 */
-                Fx& f = fxs[fx_i];
-                fx_i = (fx_i + 1) % 20;
-                f = { true, a.x + a.dir * 10, a.y - 20, (t->x > a.x ? 1 : -1) * 5.0f, 4, 60, (int32_t)0, d.dmg * gp::g.dmg_pct / 100.0f, (int8_t)a.type };
-                /* ターゲット記録: v は未使用なのでインデックスを計算 */
-                for (int i = 0; i < ENEMY_N; i++) if (&enemies[i] == t) { f.v = i; break; }
+                Fx* slot = nullptr;
+                for (auto& f2 : fxs) if (!f2.on) { slot = &f2; break; }
+                if (!slot) { slot = &fxs[fx_i]; fx_i = (fx_i + 1) % 20; }
+                *slot = Fx();
+                slot->on = true;
+                slot->x = a.x + a.dir * 10; slot->y = a.y - 20;
+                slot->vx = (t->x > a.x ? 1 : -1) * 5.0f;
+                slot->kind = 4; slot->life = 60;
+                slot->dmg = d.dmg * gp::g.dmg_pct / 100.0f;
+                slot->src = (int8_t)a.type;
+                slot->px = -9999; slot->py = -9999;
+                for (int i = 0; i < ENEMY_N; i++) if (&enemies[i] == t) { slot->v = i; break; }
             } else if (d.atktype == 2) {                     /* GORO: 前方 AoE スマッシュ */
                 for (auto& e : enemies) {
                     if (!e.alive) continue;
@@ -507,6 +536,7 @@ static Actor* nearest_ally(float x, float y)
 
 static void enemy_step(Actor& e)
 {
+    if (e.spawn_t) { e.spawn_t--; return; }   /* 出現演出中は行動しない */
     if (e.state == A_HURT) {
         if (--e.timer == 0) e.state = A_WALK;
         e.x += e.vx; e.vx *= 0.85f;
@@ -606,9 +636,8 @@ static void draw_shadow(uint16_t* fb, int sx, int sy, int w)
 }
 
 /* 味方ちびプレースホルダ (P3' でスプライト差し替え) */
-static void draw_ally(uint16_t* fb, Actor& a)
+static void draw_ally(uint16_t* fb, Actor& a, int sx, int sy)
 {
-    int sx = (int)a.x, sy = (int)a.y;
     uint16_t hair = a.flash ? C_WHITE : C_HAIR;
     uint16_t body = a.flash ? C_WHITE : C_DRESS;
     int d = a.dir;
@@ -655,9 +684,9 @@ static void draw_ally(uint16_t* fb, Actor& a)
     }
 }
 
-static void draw_enemy(uint16_t* fb, Actor& e)
+static void draw_enemy(uint16_t* fb, Actor& e, int sx, int sy)
 {
-    int sx = (int)e.x, sy = (int)e.y;
+    if (e.spawn_t && blink_on()) return;   /* 出現演出: 点滅しながら実体化 */
     uint16_t c;
     int w, h;
     switch (e.type) {
@@ -766,11 +795,7 @@ void render(uint16_t* fb)
     for (int i = 0; i < n; i++) {
         Actor* a = order[i];
         int sx = (int)a->x + ox, sy = (int)a->y + oy;
-        float wx = a->x;
-        float wy = a->y;
-        a->x = sx; a->y = sy;
-        if (a->ally) draw_ally(fb, *a); else draw_enemy(fb, *a);
-        a->x = wx; a->y = wy;
+        if (a->ally) draw_ally(fb, *a, sx, sy); else draw_enemy(fb, *a, sx, sy);
         a->px = (int16_t)a->x; a->py = (int16_t)a->y;
     }
 
