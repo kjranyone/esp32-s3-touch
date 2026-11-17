@@ -2,6 +2,7 @@
  * sandbox.cpp — 落下砂モデル物理エンジン実装
  */
 #include "sandbox.h"
+#include "game_params.h"
 #include <string.h>
 #include <esp_heap_caps.h>
 
@@ -83,7 +84,7 @@ static bool growCell(int x, int y, uint32_t prob_per1000)
 
     if (all_n > 0) {
         /* 空きマスへ成長し、隣接水を 1 つ消費 */
-        int pick = (up_n > 0 && (rnd() % 100u) < 70u) ? up[rnd() % up_n] : all[rnd() % all_n];
+        int pick = (up_n > 0 && (rnd() % 100u) < gp::g.up_bias) ? up[rnd() % up_n] : all[rnd() % all_n];
         grid[IX(x + NDX[pick], y + NDY[pick])] = CRYSTAL;
         moved[IX(x + NDX[pick], y + NDY[pick])] = 1;
         if (water_at >= 0) grid[IX(x + NDX[water_at], y + NDY[water_at])] = EMPTY;
@@ -132,17 +133,17 @@ static void waterStep(int x, int y)
 static void ambientEmitters()
 {
     /* 左: 水晶の泉 (水滴) */
-    if (tick % 6 == 0) {
+    if (gp::g.emit_water && tick % gp::g.emit_water == 0) {
         int x = 62 + (int)(rnd() % 12);
         if (grid[IX(x, 1)] == EMPTY) grid[IX(x, 1)] = WATER;
     }
     /* 右: 鉱脈の巣 (砂) */
-    if (tick % 5 == 0) {
+    if (gp::g.emit_sand && tick % gp::g.emit_sand == 0) {
         int x = 202 + (int)(rnd() % 24);
         if (grid[IX(x, 1)] == EMPTY) grid[IX(x, 1)] = SAND;
     }
     /* たまに結晶の種が落ちてくる */
-    if (tick % 1200 == 0) {
+    if (gp::g.ambient_seed && tick % gp::g.ambient_seed == 0) {
         int x = 20 + (int)(rnd() % (GW - 40));
         if (grid[IX(x, 1)] == EMPTY) grid[IX(x, 1)] = SEED;
     }
@@ -207,8 +208,8 @@ void step()
             switch (m) {
             case SAND:    sandStep(x, y); break;
             case WATER:   waterStep(x, y); break;
-            case SEED:    growCell(x, y, 25); break;    /* 種: 成長しやすい */
-            case CRYSTAL: growCell(x, y, 6);  break;    /* 結晶: ゆるやかに伝播 */
+            case SEED:    growCell(x, y, gp::g.seed_grow); break;
+            case CRYSTAL: growCell(x, y, gp::g.crystal_grow); break;
             default: break;
             }
         }

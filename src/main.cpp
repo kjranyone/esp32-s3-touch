@@ -12,6 +12,7 @@
 #include <lvgl.h>
 #include "lvgl_v8_port.h"
 #include "sandbox.h"
+#include "game_params.h"
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 
@@ -31,6 +32,7 @@ static uint32_t frame_count = 0;
 static int64_t fps_t0 = 0;
 static uint32_t fps_value = 0;
 static uint32_t status_div = 0;
+static volatile bool request_reset = false;   /* シリアルコンソールからの庭園リセット要求 */
 
 static const char* MAT_NAMES[4] = {"WATER", "SAND", "ROCK", "ERASE"};
 
@@ -46,11 +48,7 @@ static void canvas_press_cb(lv_event_t* e)
     int gy = (p.y - 64) / sandbox::CELL;
     if (gx < 0 || gx >= sandbox::GW || gy < 0 || gy >= sandbox::GH) return;
 
-    sandbox::Mat m = selected;
-    if (m == sandbox::ROCK) {
-        /* 岩はタップ(短押し)で配置、なぞりでも連続配置可 */
-    }
-    sandbox::stamp(gx, gy, 3, m);
+    sandbox::stamp(gx, gy, (int)gp::g.brush, selected);
 }
 
 static void mat_btn_cb(lv_event_t* e)
@@ -78,6 +76,13 @@ static void reset_btn_cb(lv_event_t* e)
 static void tick_cb(lv_timer_t* timer)
 {
     (void)timer;
+
+    /* シリアルコンソールからのリセット要求 */
+    if (request_reset) {
+        request_reset = false;
+        sandbox::init();
+        lv_obj_invalidate(canvas_obj);
+    }
 
     sandbox::step();
     sandbox::render(canvas_buf);
@@ -238,7 +243,46 @@ void setup()
     Serial.println("Setup done");
 }
 
+/* ---------------- シリアル調整コンソール (#046 実行中に数値を反映) ---------------- */
+static char cmd_buf[64];
+static size_t cmd_len = 0;
+
+static void handle_command(char* line)
+{
+    while (*line == ' ') line++;
+    if (*line == 0) return;
+    if (strcmp(line, "?") == 0 || strcmp(line, "help") == 0) { gp::print_all(); return; }
+    if (strcmp(line, "reset") == 0) {
+        request_reset = true;
+        Serial.println("[cmd] garden reset requested");
+        return;
+    }
+    char* sp = strchr(line, ' ');
+    if (!sp) sp = strchr(line, '=');
+    if (!sp) {
+        Serial.println("[cmd] usage: <key> <value> | ? | reset");
+        return;
+    }
+    *sp = 0;
+    long v = atol(sp + 1);
+    if (!gp::apply(line, v)) {
+        Serial.printf("[cmd] unknown key: %s\r\n", line);
+    }
+}
+
 void loop()
 {
-    delay(1000);
+    /* 物理と並行して動く調整用シリアルコンソール */
+    while (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == '\r') continue;
+        if (c == '\n') {
+            cmd_buf[cmd_len] = 0;
+            handle_command(cmd_buf);
+            cmd_len = 0;
+        } else if (cmd_len < sizeof(cmd_buf) - 1) {
+            cmd_buf[cmd_len++] = c;
+        }
+    }
+    delay(2);
 }

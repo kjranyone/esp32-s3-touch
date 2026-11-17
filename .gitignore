@@ -11,6 +11,9 @@ backup/*.bin
 *.bin
 !docs/evidence/*.bin
 
+# 外部リポジトリ (参照用にクローンしたもの)
+external/
+
 # OS / エディタ
 Thumbs.db
 .DS_Store
