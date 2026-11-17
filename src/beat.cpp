@@ -153,7 +153,7 @@ static Actor enemies[ENEMY_N];
 
 /* 背景スナップショット (ダーティ矩形復元用) */
 static uint16_t* bg = nullptr;
-static bool full_restore_pending = false;
+static int full_restore_count = 0;   /* 残数 (両バッファ分を復元してから 0) */
 static uint32_t wave_n = 1;
 static uint16_t wave_timer = 60;
 static bool wave_active = false;
@@ -257,7 +257,7 @@ void init()
     memset(fxs, 0, sizeof(fxs));
     if (!bg) bg = (uint16_t*)heap_caps_calloc(FB_W * FB_H, 2, MALLOC_CAP_SPIRAM);
     draw_bg_to(bg);
-    full_restore_pending = true;   /* 初回は全体復元 */
+    full_restore_count = 2;        /* 初回は両バッファ全体復元 */
     wave_n = 1; wave_timer = 60; wave_active = false;
     freeze = 0; special_flash = 0; shake = 0; shake_mag = 0;
     cutin_draw = 0; flash_frames = 0;
@@ -283,7 +283,7 @@ void flash_message(const char* msg, uint16_t frames)
     flash_frames = frames;
 }
 
-void request_full_restore() { full_restore_pending = true; }
+void request_full_restore() { full_restore_count = 2; }
 
 void dump()
 {
@@ -631,7 +631,7 @@ void step()
 
     /* 安全網: 定期的に背景全体を復元 (LVGL 側の予期せぬ上書きを自己修復) */
     static uint16_t heal = 0;
-    if (++heal >= 120) { heal = 0; full_restore_pending = true; }
+    if (++heal >= 120) { heal = 0; full_restore_count = 2; }
 }
 
 /* ---------------- 描画 ---------------- */
@@ -751,12 +751,12 @@ void render(uint16_t* fb)
     /* 必殺技フラッシュ: 全画面を明暗交互に塗ってから、次フレームで全体復元 */
     if (special_flash > 0) {
         fill_rect(fb, 0, 0, FB_W, FB_H, (special_flash & 1) ? C_WHITE : C_BLACK);
-        full_restore_pending = true;
+        full_restore_count = 2;   /* 両バッファを復元 */
         return;
     }
-    if (full_restore_pending && bg) {
+    if (full_restore_count > 0 && bg) {
         memcpy(fb, bg, FB_W * FB_H * 2);
-        full_restore_pending = false;
+        full_restore_count--;
     }
 
     /* 消滅したアクタ・FX の前フレーム跡地を掃除 (揺れマージン +8px) */

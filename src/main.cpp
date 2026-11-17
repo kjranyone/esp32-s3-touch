@@ -24,8 +24,10 @@ using namespace esp_panel::board;
 static Board* g_board = nullptr;
 static LCD* g_lcd = nullptr;
 static Touch* g_touch = nullptr;
-static void* canvas_raw = nullptr;
-static uint16_t* canvas = nullptr;   /* 480x480 全面バッファ (スキャン対象, 64B アライン) */
+static void* canvas_raw[2] = {nullptr, nullptr};
+static uint16_t* canvas[2] = {nullptr, nullptr};   /* ダブルバッファ (64B アライン) */
+static int render_idx = 0;    /* 次に描画するバッファ */
+static int scan_idx = 0;      /* 現在スキャン中 (表示中) のバッファ */
 
 /* ---------------- 状態 ---------------- */
 static bool skill_open = false;
@@ -215,7 +217,7 @@ static void do_shot()
     static uint8_t sbuf[512];
     int bl = 0;
     uint32_t total = 480 * 480, i = 0;
-    uint16_t* p = canvas;
+    uint16_t* p = canvas[scan_idx];   /* 表示中バッファをダンプ */
     while (i < total) {
         uint16_t c = p[i];
         uint32_t run = 1;
@@ -257,16 +259,18 @@ static void frame()
     /* 進行 */
     game::tick(dt);
     beat::step();
-    int64_t t0 = esp_timer_get_time();
-    beat::render(canvas + 56 * 480);    beat::render_hud(canvas);
-    beat::render_panel(canvas, skill_open);
-    /* キャッシュ書き戻し + スキャン切替 */
-    esp_cache_msync((void *)canvas, 480 * 480 * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    g_lcd->switchFrameBufferTo(canvas);
-    int64_t t1 = esp_timer_get_time();
 
-    prof_render += (t1 - t0);
-    prof_frames++;
+    /* 描画 (ダブルバッファ: 描画先と表示中バッファを分離 → チラつき・ティアリングゼロ) */
+    uint16_t* target = canvas[render_idx];
+    if (!skill_open) {
+        beat::render(target + 56 * 480);   /* パネル表示中は戦闘絵を休止 (パネルが壊れないように) */
+    }
+    beat::render_hud(target);
+    beat::render_panel(target, skill_open);
+    esp_cache_msync((void *)target, 480 * 480 * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    g_lcd->switchFrameBufferTo(target);
+    scan_idx = render_idx;
+    render_idx ^= 1;
 
     /* FPS (1s) */
     frame_count++;
@@ -318,15 +322,24 @@ void setup()
     g_lcd = g_board->getLCD();
     g_touch = g_board->getTouch();
 
-    canvas_raw = heap_caps_calloc(480 * 480 * 2 + 64, 1, MALLOC_CAP_SPIRAM);
-    assert(canvas_raw);
-    canvas = (uint16_t *)(((uintptr_t)canvas_raw + 63) & ~(uintptr_t)63);   /* 64B アライン */
-    g_lcd->switchFrameBufferTo(canvas);   /* スキャン対象を自前バッファへ */
+    for (int i = 0; i < 2; i++) {
+        canvas_raw[i] = heap_caps_calloc(480 * 480 * 2 + 64, 1, MALLOC_CAP_SPIRAM);
+        assert(canvas_raw[i]);
+        canvas[i] = (uint16_t *)(((uintptr_t)canvas_raw[i] + 63) & ~(uintptr_t)63);   /* 64B アライン */
+    }
 
     game::init();
     beat::init();
     beat::set_wave(game::st.wave_reached ? game::st.wave_reached : 1);
     game::save();
+
+    /* 背景を先に 1 枚描いてからスキャン開始 (起動時のノイズ防止) */
+    beat::render(canvas[0] + 56 * 480);
+    beat::render_hud(canvas[0]);
+    esp_cache_msync((void *)canvas[0], 480 * 480 * 2, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    g_lcd->switchFrameBufferTo(canvas[0]);
+    scan_idx = 0;
+    render_idx = 1;
 
     Serial.println("Setup done");
 }
