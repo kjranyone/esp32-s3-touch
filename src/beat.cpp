@@ -92,6 +92,8 @@ static const uint8_t LET[26][5] = {
 };
 static const uint8_t GL_DASH[5] = {0x0,0x0,0x7,0x0,0x0};
 static const uint8_t GL_BANG[5] = {0x2,0x2,0x2,0x0,0x2};
+static const uint8_t GL_DOT[5]  = {0x0,0x0,0x0,0x0,0x2};
+static const uint8_t GL_SLA[5]  = {0x1,0x1,0x2,0x4,0x4};
 static const uint8_t GL_SPC[5]  = {0x0,0x0,0x0,0x0,0x0};
 
 static const uint8_t* glyph(char c)
@@ -101,6 +103,8 @@ static const uint8_t* glyph(char c)
     if (c >= 'A' && c <= 'Z') return LET[c - 'A'];
     if (c == '-') return GL_DASH;
     if (c == '!') return GL_BANG;
+    if (c == '.') return GL_DOT;
+    if (c == '/') return GL_SLA;
     return GL_SPC;
 }
 static int draw_char(uint16_t* fb, int x, int y, char c, int scale, uint16_t col)
@@ -508,8 +512,10 @@ static void ally_step(Actor& a)
     if (fabsf(dx) > reach) {
         a.dir = dx > 0 ? 1 : -1;
         a.x += a.dir * d.spd;
-        if (a.x < 16) a.x = 16;       /* 味方の行動範囲は画面内に限る */
-        if (a.x > 440) a.x = 440;
+        /* 陣形防御: 味方は左寄り陣地を守る (画面外へ追わない) */
+        float min_x = 20, max_x = (a.type == 1) ? 150 : 200;
+        if (a.x < min_x) a.x = min_x;
+        if (a.x > max_x) a.x = max_x;
         a.y += (dy > 0 ? 1 : -1) * d.spd * 0.5f;
         if (a.y < BELT_Y0) a.y = BELT_Y0;
         if (a.y > BELT_Y1) a.y = BELT_Y1;
@@ -828,6 +834,88 @@ void render(uint16_t* fb)
         int w = text_w(flash_msg_buf, 2);
         draw_text(fb, (FB_W - w) / 2, 66, flash_msg_buf, 2, RGB(0xFF, 0x9A, 0xB8));
     }
+}
+
+/* ---------------- HUD (fb 直接描画) ---------------- */
+void render_hud(uint16_t* fb)
+{
+    fill_rect(fb, 0, 0, FB_W, 56, RGB(0x10, 0x10, 0x18));
+    fill_rect(fb, 0, 54, FB_W, 2, RGB(0x2A, 0x2C, 0x52));
+
+    /* LUMI HP バー */
+    fill_rect(fb, 8, 8, 144, 16, C_BLACK);
+    float hp = allies[0].hp, hm = allies[0].hpmax;
+    if (hm > 0) fill_rect(fb, 10, 10, (int)(140 * hp / hm), 12, RGB(0xE0, 0x50, 0x60));
+    draw_text(fb, 12, 11, "LUMI", 1, C_WHITE);
+
+    char b[48], f1[24], f2[24];
+    snprintf(b, sizeof(b), "C %s +%.1f/S",
+             game::fmt(game::st.crystals, f1, sizeof(f1)), game::income_rate());
+    draw_text(fb, 170, 6, b, 2, C_AQUA);
+    snprintf(b, sizeof(b), "WAVE %u", (unsigned)wave_n);
+    draw_text(fb, 392, 6, b, 2, RGB(0xE8, 0xD8, 0xA0));
+
+    double diff = game::next_goal(f1, sizeof(f1));
+    snprintf(b, sizeof(b), "NEXT %s -%s", f1, game::fmt(diff, f2, sizeof(f2)));
+    draw_text(fb, 170, 30, b, 2, RGB(0xC0, 0xC0, 0xD0));
+    if (game::pet_active()) {
+        snprintf(b, sizeof(b), "PET %d:%02d", game::pet_remaining_s() / 60, game::pet_remaining_s() % 60);
+        draw_text(fb, 392, 30, b, 2, RGB(0xF0, 0xA0, 0xB8));
+    }
+
+    /* 必殺ゲージ (下部) */
+    fill_rect(fb, 0, 408, FB_W, 72, RGB(0x10, 0x10, 0x18));
+    const uint16_t gcol[ALLY_N] = {C_AQUA, RGB(0x9C, 0x6C, 0xD8), RGB(0xD8, 0xA8, 0x50)};
+    for (int i = 0; i < ALLY_N; i++) {
+        fill_rect(fb, 8 + i * 160, 420, 150, 22, C_BLACK);
+        int w = (int)(146 * allies[i].rage / 100);
+        fill_rect(fb, 10 + i * 160, 422, w, 18, gcol[i]);
+        draw_text(fb, 12 + i * 160, 446, ADEF[i].name, 1, gcol[i]);
+    }
+
+    /* SKILL ボタン */
+    fill_rect(fb, SKILLBTN_X, SKILLBTN_Y, SKILLBTN_W, SKILLBTN_H, RGB(0x1C, 0x3A, 0x50));
+    int w2 = text_w("SKILL", 2);
+    draw_text(fb, SKILLBTN_X + (SKILLBTN_W - w2) / 2, SKILLBTN_Y + 26, "SKILL", 2, C_WHITE);
+}
+
+/* ---------------- スキルパネル ---------------- */
+static void draw_node(uint16_t* fb, int x, int y, int i)
+{
+    uint16_t bg = RGB(0x1C, 0x3A, 0x50);
+    char st[24], f1[16];
+    uint16_t stc = C_WHITE;
+    if (game::st.owned[i]) {
+        bg = RGB(0x1E, 0x5A, 0x34);
+        snprintf(st, sizeof(st), "OWNED");
+        stc = RGB(0x8F, 0xE8, 0xA0);
+    } else if (game::skill_locked(i)) {
+        bg = RGB(0x28, 0x28, 0x34);
+        snprintf(st, sizeof(st), "LOCKED");
+        stc = RGB(0x88, 0x88, 0x98);
+    } else {
+        bool ok = game::skill_affordable(i);
+        snprintf(st, sizeof(st), "COST %s", game::fmt(game::SKILLS[i].cost, f1, sizeof(f1)));
+        stc = ok ? C_WHITE : RGB(0xE0, 0x70, 0x70);
+        bg = ok ? RGB(0x1C, 0x3A, 0x50) : RGB(0x24, 0x24, 0x30);
+    }
+    fill_rect(fb, x, y, NODE_W, NODE_H, bg);
+    fill_rect(fb, x, y, NODE_W, 2, C_BLACK);
+    draw_text(fb, x + 8, y + 8, game::SKILLS[i].name, 2, C_WHITE);
+    draw_text(fb, x + 8, y + 34, st, 1, stc);
+}
+
+void render_panel(uint16_t* fb, bool open)
+{
+    if (!open) return;
+    fill_rect(fb, PANEL_X, PANEL_Y, PANEL_W, PANEL_H, RGB(0x14, 0x14, 0x20));
+    fill_rect(fb, PANEL_X, PANEL_Y, PANEL_W, 2, RGB(0x2A, 0x2C, 0x52));
+    draw_text(fb, PANEL_X + 10, PANEL_Y + 10, "SKILL TREE", 2, RGB(0x9F, 0xE8, 0xD8));
+    fill_rect(fb, CLOSE_X, CLOSE_Y, CLOSE_W, CLOSE_H, RGB(0x50, 0x28, 0x28));
+    draw_text(fb, CLOSE_X + 18, CLOSE_Y + 8, "X", 2, C_WHITE);
+
+    for (int r = 0; r < 4; r++) draw_node(fb, NODE0_X, NODE0_Y0 + r * NODE0_PITCH, PANEL_COL0[r]);
+    for (int r = 0; r < 5; r++) draw_node(fb, NODE1_X, NODE1_Y0 + r * NODE1_PITCH, PANEL_COL1[r]);
 }
 
 } // namespace beat

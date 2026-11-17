@@ -169,6 +169,7 @@ bool buy_skill(int i)
 }
 
 /* ---------- 次の目標 (#023) ---------- */
+/* 次の目標 (#023)。全て購入可能なら cheapest を READY で返す */
 double next_goal(char* buf, size_t len)
 {
     double best = 1e300;
@@ -176,9 +177,9 @@ double next_goal(char* buf, size_t len)
     for (int i = 0; i < SKILL_N; i++) {
         if (st.owned[i] || skill_locked(i)) continue;
         double d = SKILLS[i].cost - st.crystals;
-        if (d > 0 && d < best) { best = d; name = SKILLS[i].name; }
+        if (d < best) { best = d; name = SKILLS[i].name; }
     }
-    if (best > 1e299) best = 0;
+    if (best < 0) best = 0;
     snprintf(buf, len, "%s", name);
     return best;
 }
