@@ -1,182 +1,128 @@
-# 画像生成指示書 (GPT Imagen 用) — 美少女マスコット「ルミ」
+# 画像生成指示書 (GPT Imagen 用) v3 — ベルトスクロール用ちびキャラ
 
-放置系インクリメンタル『ルミの水晶庭園』(詳細: `docs/GAME_DESIGN.md`) のための
-立ち絵・表情差分を **GPT Imagen (GPT Image)** で生成するための手順書。
+『ルミの水晶庭園』v3(ベルトスクロールアクション)用のスプライトを作る手順。
+スタイルは **アニメ調ちびキャラ(2頭身)**。GPT でフレーム整合を取るのが最難点なので、
+「参照画像添付 + 正面固定 + ポーズ数を絞る」戦略を取る。
 
-生成したファイルはリポジトリの `assets_src/` フォルダに保存してください(取り込みと RGB565 変換はこちらで行います)。
-
----
-
-## 1. ゲーム概要(アセットが必要な理由)
-
-- **放置系 × 物理箱庭**: 庭園の施設が自動でクリスタルを生産し、画面は物理演算で動く箱庭として常に動いている
-- プレイヤーの操作は「施設/アップグレード購入」「昇華」「ルミを撫でる」「水や砂を注ぐ」だけ(タップ連打要素なし)
-- マスコット少女 **「ルミ」(クリスタルの精霊)** は**物理世界の庭の中に立っており**、状況で表情が切り替わる
-- 立ち絵は透過 PNG なので、物理キャンバス(砂・水・結晶)の前面に重ねて表示する
-
-| 状況 | 表現 | 対応アセット |
-|---|---|---|
-| 待機(常時) | 微笑み、たまに瞬き | `01_idle`, `02_blink` |
-| マイルストーン達成 / 施設・アップグレード購入 / 結晶が大きく育つ | 喜んで両手を挙げる | `03_happy` |
-| 頭をなでなで(スワイプ・生産バフ) | 照れて目を閉じる | `04_pet` |
-| 電源を切っていた期間からの復帰 | あくび(眠そう)→ 報告 | `05_sleepy` |
-| 離席中(スクリーンセーバ) | 丸まって寝ている | `06_sleep` |
-| 水(や砂)をかけられる / 不意の接触 | 驚き | `07_surprised` |
-| (UI 用)背景・通貨アイコン | 画面の土台 | `90_bg`, `91_crystal` |
-
-> 物理レイヤーの追加によって生成アセットは **増えも減りもしません**。上の表の内容だけで OK です。
+生成したファイルは `assets_src/` に保存する(縮小・RGB565 化はこちらで実施)。
 
 ---
 
-## 2. キャラクター設定(全アセット共通の"アンカー")
+## 1. 必要アセット一覧
 
-一貫性を保つため、キャラの識別点は **シンプルで数を絞る**。以下を全プロンプトに毎回含めること。
-
-> **ルミ (Lumi)** — クリスタルの精霊の少女
-> - 髪:シルバーホワイトのツインテール、毛先だけ水色
-> - 瞳:水色(ライトアクア)
-> - 服装:白いワンピースに淡い水色のサスペンダー、大きな袖
-> - アクセサリ:頭の横に星形の水色クリップ(左右1個ずつ)
-> - 年齢感:10代前半くらいのあどけなさ、身長は低め(妖精っぽい可愛らしさ)
-> - 小物:胸元に小さな水晶のペンダント
-
----
-
-## 3. 共通スタイル指定(全アセットで固定)
-
-```
-anime style, clean thick lineart, soft cel shading, pastel color palette,
-friendly and cute mascot design, high contrast readable colors,
-suitable for a small 480x480 LCD screen, minimal fine details,
-no text, no watermark, no signature
-```
-
-画面・形式の要件:
-
-| 項目 | 指定 |
+### ルミ (プレイヤー) — 計 8 枚
+| ファイル | 内容 |
 |---|---|
-| サイズ | **正方形 1024×1024** で生成(デバイス側で縮小します) |
-| 背景 | **透過 PNG**。透過がうまくいかない場合は背景を **完全なマゼンタ単色 (#FF00FF)** に(影を背景に落とさない) |
-| 構図 | 立ち絵は全身、キャラがフレームの高さの約 75〜80% を占め、**やや下寄せ**。上 15〜20% は余白(HUD 表示用) |
-| ファイル名 | 下記アセット一覧の名前のまま |
+| `lumi_ref.png` | キャラ定義(全フレームの参照元) |
+| `lumi_idle.png` | 待機(構え) |
+| `lumi_walk.png` | 歩き(脚を動かした 1 枚。2 フレーム歩行は idle と交互で代用) |
+| `lumi_atk1.png` | 攻撃 1 段目(片手パンチ/素手) |
+| `lumi_atk2.png` | 攻撃 2 段目(逆手) |
+| `lumi_atk3.png` | 攻撃 3 段目(両手で強打・大ポーズ) |
+| `lumi_hurt.png` | 被弾(痛がる極端ポーズ) |
+| `lumi_down.png` | 転倒(寝ている。復帰はリバース再生) |
+
+### 敵 — 各 2 枚 (idle + attack)。被弾は白フラッシュで代用、転倒は回転で代用
+| ファイル | 内容 |
+|---|---|
+| `slime_idle.png` / `slime_atk.png` | スライム(緑の体当たり雑魚) |
+| `bat_idle.png` / `bat_atk.png` | コウモリ(素早いヒットアウェイ) |
+| `golem_idle.png` / `golem_atk.png` | ゴーレム(大振りタンク) |
+| `boss_idle.png` / `boss_atk.png` | ボス(庭を荒らす巨大な影) |
+
+### 背景 — 2 枚
+| ファイル | 内容 |
+|---|---|
+| `bg_far.png` | 遠景(水晶の森のシルエット。低コントラスト)横長 |
+| `bg_ground.png` | 歩行帯(庭園の地面。タイル可能な横長ストリップ) |
 
 ---
 
-## 4. 生成手順(この順番が重要)
+## 2. キャラ設定アンカー (全フレーム共通)
 
-### Step 1: キャラクターシート `00_chara_sheet.png` を作る
-まずキャラの"定義"を作る。以降の全アセットは **この画像を参照画像として添付** して「同じキャラで」と指示する。
+> **ルミ (Lumi)** — クリスタルの精霊の少女、**2頭身ちび**、戦闘服
+> - 銀髪ツインテール(毛先水色)、水色の瞳、星形の髪クリップ左右
+> - 白×水色の戦闘ワンピ、胸に水晶ペンダント、素手
+> - **横向き(右向き)サイドビュー**で描く(ベルトスクロールは横視点)
 
-**プロンプト例:**
-```
-Character design sheet of ONE anime girl mascot named Lumi, a little crystal spirit fairy.
-She has: silver-white twin-tails with light aqua tips, aqua eyes, a white dress with pale
-aqua suspenders and big sleeves, star-shaped aqua hair clips on both sides of her head,
-a small crystal pendant on her chest. Cute petite girl, early-teens look.
-Full body, standing, front view, neutral gentle smile, arms relaxed at her sides.
-Clean thick lineart, soft cel shading, pastel palette. Centered, full body visible,
-occupying about 80% of the frame height, slightly low in frame with headroom above.
-Plain transparent background. No text, no watermark.
-```
-
-### Step 2: メイン立ち絵 `01_idle.png`
-`00_chara_sheet.png` を **画像参照として添付** し:
+## 3. 共通スタイル (全アセット固定)
 
 ```
-Using the attached character as the exact same girl (same hair, eyes, outfit, hair clips,
-pendant), draw her full body standing portrait: gentle warm smile, eyes open, arms relaxed
-at her sides, looking slightly toward the viewer. Same pose as the reference.
-Anime style, clean thick lineart, soft cel shading, pastel palette, transparent background,
-no text. Square image, character occupying about 80% of the height, slightly low in frame.
+anime chibi style, 2-heads-tall proportion, clean thick lineart, soft cel shading,
+pastel colors, side view facing right, full body centered,
+character occupying about 60% of the frame height, plain transparent background,
+no text, no watermark
 ```
 
-### Step 3: 表情差分(以降はすべて `01_idle.png` を参照添付して生成)
-ポイント: **ポーズは変えない**(差分は表情と腕だけ)。全画面をまるごと差し替えるので、
-体の位置がずれるとアニメーションがガタつきます。
+- サイズ: 1024×1024 正方形 → デバイス側で高さ ~96px に縮小
+- 透過 PNG(不可なら完全マゼンタ #FF00FF)
+- **背景に影を落とさない**(影はデバイス側で楕円描画)
 
-**`02_blink.png` — 瞬き(必須)**
+## 4. 生成手順
+
+### Step 1: `lumi_ref.png`
 ```
-Same exact girl, same pose, same framing and same composition as the attached image.
-Only change: her eyes are fully closed (blink frame). Everything else identical.
+Anime chibi character design of Lumi, a crystal spirit girl, 2-heads-tall.
+Silver-white twin-tails with aqua tips, aqua eyes, star-shaped hair clips,
+white and pale-aqua battle dress, small crystal pendant, bare hands, ready stance.
+Side view facing right. Clean thick lineart, soft cel shading, pastel palette.
+Centered, full body, transparent background, no text.
+```
+
+### Step 2: 各フレーム (`lumi_ref.png` を必ず参照添付)
+共通の冒頭文:
+```
+Exact same chibi girl as the reference image (same hair, outfit, colors, proportions,
+same side view facing right, same scale and same position in frame).
+Only change the pose: <ポーズ>
 Transparent background, no text.
 ```
+ポーズ指定:
+- idle: `standing ready pose, fists slightly raised, relaxed`
+- walk: `mid-walk, one leg forward, arms swinging`
+- atk1: `throwing a quick straight punch with the front arm, slight lean forward`
+- atk2: `punching with the other arm, body twisting`
+- atk3: `big powerful double-fisted smash overhead, exaggerated dynamic pose`
+- hurt: `flinching, leaning back, eyes closed, arms flailing (exaggerated pain pose)`
+- down: `lying on the ground on her back, knocked down, dizzy`
 
-**`03_happy.png` — 喜び(収入ボーナス)**
+### Step 3: 敵 (ルミ参照は不要。敵内での一貫性のみ)
 ```
-Same exact girl and same framing as the attached image, full body.
-Change: joyful expression, big open smile, eyes sparkling, both arms raised up cheering,
-slight bounce pose. Keep her feet position and body size identical.
-Transparent background, no text.
+Anime chibi enemy design for a cute beat-em-up game, side view facing LEFT,
+2-heads-tall, clean thick lineart, soft cel shading, transparent background, no text.
+<敵ごとの説明>
 ```
+- slime: `a round green slime monster with big cute eyes, small fangs`
+- bat: `a small speedy purple bat with tiny wings`
+- golem: `a heavy stone golem with moss and glowing blue crystal veins, big fists`
+- boss: `a large shadowy plant-monster with red eyes entangled in dead crystal vines, twice as big as a normal enemy`
 
-**`04_pet.png` — なでなで反応**
-```
-Same exact girl and same framing as the attached image, full body.
-Change: blushing cheeks, eyes closed, shy happy smile, both hands together near her chest,
-slightly leaning her head down as if being petted. Keep composition identical.
-Transparent background, no text.
-```
+attack フレームは idle を参照添付して `same creature, lunging attack pose` で生成。
 
-**`05_sleepy.png` — 眠い(放置復帰)**
+### Step 4: 背景
+- `bg_ground.png`:
 ```
-Same exact girl and same framing as the attached image, full body.
-Change: sleepy face, half-closed droopy eyes, small yawn with one hand near her mouth,
-slightly slouched posture. Keep composition identical. Transparent background, no text.
+Seamless horizontal tileable ground strip for a 2D side-scroller set in a magical
+crystal garden, soft pastel grass with faint glowing crystal fragments,
+low contrast (must not compete with characters), anime painted style, no text.
 ```
-
-**`06_sleep.png` — スリープ画面**
+- `bg_far.png`:
 ```
-Same exact girl as the attached image.
-Change: she is sitting on the ground curled up, sleeping peacefully with closed eyes,
-hugging her knees, tiny "Z z z" floating is NOT allowed — no text at all.
-Soft relaxed pose, full body visible, same art style. Transparent background, no text.
-```
-
-**`07_surprised.png` — 驚き(不意のタップ)**
-```
-Same exact girl and same framing as the attached image, full body.
-Change: surprised expression, wide eyes, small "o" mouth, hands slightly raised near her
-chest, leaning back a little. Keep feet position identical.
-Transparent background, no text.
+Distant background layer for a 2D side-scroller: silhouettes of crystal trees and
+a pale aqua-violet sky, very low contrast, soft gradients, anime painted style,
+no characters, no text.
 ```
 
-### Step 4: UI 素材
+## 5. 納品チェックリスト
 
-**`90_bg.png` — 画面背景 480×480 用**
-```
-Simple soft background illustration for a square LCD screen, magical crystal workshop theme:
-very light pastel blue-violet gradient with faint silhouettes of crystals and shelves,
-extremely low contrast and low detail (it must stay behind a character and UI text),
-no characters, no text, no strong shapes in the center area.
-```
-※ これは透過ではなく不透明で OK。
+- [ ] ルミ全 8 フレームで **髪型・服・色・2頭身比率・右向き** が一致
+- [ ] 攻撃 3 フレームは **拳の位置がコマ送りで連続**に見える(体の位置はほぼ同じ)
+- [ ] 敵は idle/attack で **大きさ・配色一致**、向きは左
+- [ ] 透過 or 完全マゼンタ、影なし
+- [ ] `lumi_ref.png` と他フレームを並べて **黒塗りでも判別可能**(シルエット判定)
 
-**`91_crystal.png` — 通貨アイコン**
-```
-A single cute crystal gem icon, light aqua color with soft glow, small star sparkles,
-anime game UI icon style, thick clean outline, centered in the square frame,
-occupying about 60% of the frame, transparent background, no text.
-```
+## 6. 技術メモ
 
-### (任意 / v2 用)追加差分
-`08_proud.png`(大型アップグレード購入時の得意顔)、`09_wave.png`(起動時の挨拶)、
-瞬きの中間フレーム(`02_blink_half`:まぶた半分)を作るとアニメがさらに滑らかになります。
-
----
-
-## 5. チェックリスト(納品前に自己確認)
-
-- [ ] 全アセットで **ツインテールの形状・水色の毛先・星クリップ左右2個・水晶ペンダント** が一致している
-- [ ] **黒く塗ってシルエットにしても「ルミ」と判別できる**(桜井スキル §8: シルエットでキャラを立てる)
-- [ ] 立ち絵系(`01`〜`07`)は **体の位置・大きさ・足の位置がほぼ同じ**(表情と腕だけ変わる)
-- [ ] 背景が透過 or 完全マゼンタ単色(被り物・グラデーション影がない)
-- [ ] テキスト・署名・透かしが一切無い
-- [ ] ファイル名が指示どおり(`01_idle.png` など、2桁番号 + 英小文字)
-
----
-
-## 6. 取り込み後の技術メモ(こちらで作業)
-
-- 1024×1024 → 480×480 に縮小し、LVGL 用に RGB565 変換(C 配列は Flash、実行時は PSRAM に展開)
-- `01_idle` ⇄ `02_blink` を LVGL タイマーで 2 枚スワップ(瞬き)、`04_pet`/`03_happy` 等はイベントで差し替え
-- 表情差分はフルフレーム交換方式なので、差分間の構図一致が品質の最重要ポイント
+- 高さ ~96px に縮小して RGB565 変換。攻撃フレームは必要に応じ 1.2 倍表示(誇張)
+- 被弾 = 白フラッシュ(色反転)、転倒 = down フレーム + 復帰は逆再生でコスト削減
+- 敵は左右反転で向きを切り替える

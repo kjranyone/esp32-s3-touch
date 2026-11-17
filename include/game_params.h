@@ -1,14 +1,12 @@
 /**
- * game_params.h — 調整パラメータの外部定義
+ * game_params.h — 調整パラメータの外部定義 (#046)
  *
- * 桜井スキル #046「調整をしやすくする仕組み」に基づき、
- * 調整したい数値はプログラムに直書きせずここに集約する。
  * シリアルコンソール (115200) から `キー 値` で実行中に書き換えられる。
+ *   dmg_pct 125     → ダメージ倍率 125%
+ *   ?               → 現在値をすべて表示
+ *   reset           → 庭園(ステージ)を初期化
  *
- * 使い方例:
- *   seed_grow 100     → 種の成長確率を 100/1000/フレーム に
- *   ?                 → 現在値をすべて表示
- *   reset             → 庭園を初期化
+ * スキル購入はこの値を書き換えることで「即時反映」される。
  */
 #pragma once
 #include <stdint.h>
@@ -16,23 +14,23 @@
 namespace gp {
 
 struct Params {
-    /* 物理エンジン */
-    uint32_t seed_grow;        /* 種の成長確率 (x/1000 per frame) */
-    uint32_t crystal_grow;     /* 結晶の伝播確率 (x/1000 per frame) */
-    uint32_t up_bias;          /* 成長が上方向を優先する度合い (%) */
+    /* 戦闘 (スキルで強化される基礎値) */
+    uint32_t dmg_pct;          /* ダメージ倍率 (%) */
+    uint32_t move_pct;         /* 移動速度倍率 (%) */
+    uint32_t reach_pct;        /* 攻撃射程倍率 (%) */
+    uint32_t hp_pct;           /* 最大HP倍率 (%) */
 
-    /* エミッタ (Phase 4 で施設に接続) */
-    uint32_t emit_water;       /* 水滴の間隔 (フレーム) */
-    uint32_t emit_sand;        /* 鉱砂の間隔 (フレーム) */
-    uint32_t ambient_seed;     /* 自然に落ちる種の間隔 (フレーム) */
+    /* 放置収入 */
+    uint32_t idle_x10;         /* 放置収入 x10 (5 = 0.5/s) */
 
-    /* 操作 */
-    uint32_t brush;            /* スタンプ半径 (セル) */
+    /* なでなでバフ */
+    uint32_t pet_buff_pct;     /* バフ率 (%) */
+    uint32_t pet_duration_min; /* バフ持続 (分) */
 };
 
-extern Params g;   /* 実行中に書き換え可能なグローバルパラメータ */
+extern Params g;
 
-void print_all();                          /* 現在値をシリアルへダンプ */
-bool apply(const char* key, long value);   /* キー名で値を更新 (成功で true) */
+void print_all();
+bool apply(const char* key, long value);
 
 } // namespace gp

@@ -1,5 +1,5 @@
 /**
- * game_params.cpp — パラメータの実体とシリアル調整
+ * game_params.cpp — パラメータ実体とシリアル調整
  */
 #include "game_params.h"
 #include <Arduino.h>
@@ -8,24 +8,24 @@
 namespace gp {
 
 Params g = {
-    /* .seed_grow        */ 25,    /* 種: 2.5%/frame @30fps ≈ 0.75回/s */
-    /* .crystal_grow     */ 6,     /* 結晶: ゆるやかに伝播 */
-    /* .up_bias          */ 70,    /* 上方向成長 70% */
-    /* .emit_water       */ 6,     /* 30fps で 5個/s の水 */
-    /* .emit_sand        */ 5,
-    /* .ambient_seed     */ 1200,  /* 40秒に1個 */
-    /* .brush            */ 3,
+    /* .dmg_pct          */ 100,
+    /* .move_pct         */ 100,
+    /* .reach_pct        */ 100,
+    /* .hp_pct           */ 100,
+    /* .idle_x10         */ 5,     /* 0.5/s */
+    /* .pet_buff_pct     */ 10,
+    /* .pet_duration_min */ 10,
 };
 
 struct Entry { const char* key; uint32_t* value; };
 static const Entry TABLE[] = {
-    {"seed_grow",    &g.seed_grow},
-    {"crystal_grow", &g.crystal_grow},
-    {"up_bias",      &g.up_bias},
-    {"emit_water",   &g.emit_water},
-    {"emit_sand",    &g.emit_sand},
-    {"ambient_seed", &g.ambient_seed},
-    {"brush",        &g.brush},
+    {"dmg_pct",   &g.dmg_pct},
+    {"move_pct",  &g.move_pct},
+    {"reach_pct", &g.reach_pct},
+    {"hp_pct",    &g.hp_pct},
+    {"idle_x10",  &g.idle_x10},
+    {"pet_buff",  &g.pet_buff_pct},
+    {"pet_min",   &g.pet_duration_min},
 };
 
 bool apply(const char* key, long value)
