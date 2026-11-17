@@ -508,6 +508,8 @@ static void ally_step(Actor& a)
     if (fabsf(dx) > reach) {
         a.dir = dx > 0 ? 1 : -1;
         a.x += a.dir * d.spd;
+        if (a.x < 16) a.x = 16;       /* 味方の行動範囲は画面内に限る */
+        if (a.x > 440) a.x = 440;
         a.y += (dy > 0 ? 1 : -1) * d.spd * 0.5f;
         if (a.y < BELT_Y0) a.y = BELT_Y0;
         if (a.y > BELT_Y1) a.y = BELT_Y1;

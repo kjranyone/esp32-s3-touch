@@ -36,7 +36,12 @@ static lv_obj_t* pet_label = nullptr;
 static lv_obj_t* skill_panel = nullptr;
 static lv_obj_t* node_btns[game::SKILL_N];
 static lv_obj_t* node_sub[game::SKILL_N];
+static char node_buf[game::SKILL_N][24];
 static lv_obj_t* gauge_bars[beat::ALLY_N];
+static bool skill_open = false;
+
+/* HUD ラベル用の静的テキストバッファ (毎秒の malloc/free をなくす) */
+static char buf_crystals[32], buf_next[48], buf_pet[24], buf_wave[24];
 
 /* なでなでジェスチャ */
 static int16_t sw_x0 = 0, sw_y0 = 0, sw_dx = 0, sw_dy = 0;
@@ -108,10 +113,13 @@ static void skill_btn_cb(lv_event_t* e)
 static void open_skill_cb(lv_event_t* e)
 {
     (void)e;
-    if (lv_obj_has_flag(skill_panel, LV_OBJ_FLAG_HIDDEN))
+    if (lv_obj_has_flag(skill_panel, LV_OBJ_FLAG_HIDDEN)) {
         lv_obj_clear_flag(skill_panel, LV_OBJ_FLAG_HIDDEN);
-    else
+        skill_open = true;
+    } else {
         lv_obj_add_flag(skill_panel, LV_OBJ_FLAG_HIDDEN);
+        skill_open = false;
+    }
     beat::request_full_restore();   /* パネル開閉で壊れた領域を修復 */
 }
 
@@ -119,6 +127,8 @@ static void close_skill_cb(lv_event_t* e)
 {
     (void)e;
     lv_obj_add_flag(skill_panel, LV_OBJ_FLAG_HIDDEN);
+    skill_open = false;
+    beat::request_full_restore();
 }
 
 /* ================= パネル更新 (1Hz) ================= */
@@ -128,20 +138,21 @@ static void refresh_skill_panel()
         lv_obj_t* sub = node_sub[i];
         if (!sub) continue;
         if (game::st.owned[i]) {
-            lv_label_set_text(sub, "OWNED");
+            snprintf(node_buf[i], 24, "OWNED");
             lv_obj_set_style_text_color(sub, lv_color_hex(0x8FE8A0), 0);
             lv_obj_set_style_bg_color(node_btns[i], lv_color_hex(0x1E5A34), 0);
         } else if (game::skill_locked(i)) {
-            lv_label_set_text(sub, "LOCKED");
+            snprintf(node_buf[i], 24, "LOCKED");
             lv_obj_set_style_text_color(sub, lv_color_hex(0x888898), 0);
             lv_obj_set_style_bg_color(node_btns[i], lv_color_hex(0x282834), 0);
         } else {
             bool ok = game::skill_affordable(i);
-            lv_label_set_text_fmt(sub, "%s %s", game::fmt(game::SKILLS[i].cost, fmt_buf[0], 24),
-                                  ok ? "" : "(low)");
+            snprintf(node_buf[i], 24, "%s %s", game::fmt(game::SKILLS[i].cost, fmt_buf[0], 24),
+                     ok ? "" : "(low)");
             lv_obj_set_style_text_color(sub, lv_color_hex(ok ? 0xFFFFFF : 0xE07070), 0);
             lv_obj_set_style_bg_color(node_btns[i], lv_color_hex(0x1C3A50), 0);
         }
+        lv_label_set_text_static(sub, node_buf[i]);
     }
 }
 
@@ -155,24 +166,27 @@ static void refresh_hud()
     for (int i = 0; i < beat::ALLY_N; i++)
         lv_bar_set_value(gauge_bars[i], beat::ally_rage(i), LV_ANIM_OFF);
 
-    /* クリスタル + 放置収入 */
-    game::fmt(game::st.crystals, fmt_buf[0], 24);
-    lv_label_set_text_fmt(crystals_label, "C %s  (+%.1f/s)", fmt_buf[0], game::income_rate());
+    /* 静的バッファに書いてから static text として設定 (アロケーションゼロ) */
+    snprintf(buf_crystals, sizeof(buf_crystals), "C %s  (+%.1f/s)",
+             game::fmt(game::st.crystals, fmt_buf[0], 24), game::income_rate());
+    lv_label_set_text_static(crystals_label, buf_crystals);
 
-    /* ウェーブ */
-    lv_label_set_text_fmt(wave_label, "WAVE %u", (unsigned)beat::wave());
+    snprintf(buf_wave, sizeof(buf_wave), "WAVE %u", (unsigned)beat::wave());
+    lv_label_set_text_static(wave_label, buf_wave);
 
-    /* 次の目標 (#023) */
     double diff = game::next_goal(fmt_buf[0], 24);
-    lv_label_set_text_fmt(next_label, "NEXT: %s (-%s)", fmt_buf[0],
-                          game::fmt(diff, fmt_buf[1], 24));
+    snprintf(buf_next, sizeof(buf_next), "NEXT: %s (-%s)", fmt_buf[0],
+             game::fmt(diff, fmt_buf[1], 24));
+    lv_label_set_text_static(next_label, buf_next);
 
-    /* なでなでバフ (常時インジケータ) */
-    if (game::pet_active())
-        lv_label_set_text_fmt(pet_label, "PET %d:%02d",
-                              game::pet_remaining_s() / 60, game::pet_remaining_s() % 60);
-    else
+    if (game::pet_active()) {
+        snprintf(buf_pet, sizeof(buf_pet), "PET %d:%02d",
+                 game::pet_remaining_s() / 60, game::pet_remaining_s() % 60);
+        lv_label_set_text_static(pet_label, buf_pet);
+        lv_obj_clear_flag(pet_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
         lv_obj_add_flag(pet_label, LV_OBJ_FLAG_HIDDEN);
+    }
 
     refresh_skill_panel();
 }
@@ -202,12 +216,12 @@ static void tick_cb(lv_timer_t* timer)
         pend_wave = 0;
     }
 
-    /* ゲーム進行 */
+    /* ゲーム進行 (スキルパネル表示中は描画を休止: パネルの絵を壊さない。戦闘は継続 = 放置) */
     int64_t t0 = esp_timer_get_time();
     game::tick(dt);
     beat::step();
     int64_t t1 = esp_timer_get_time();
-    beat::render(game_fb + 56);   /* ゲーム領域はパネル行 56..407 (HUD 分をオフセット) */
+    if (!skill_open) beat::render(game_fb + 56);
     int64_t t2 = esp_timer_get_time();
     prof_step += (t1 - t0);
     prof_render += (t2 - t1);
@@ -240,6 +254,10 @@ static void tick_cb(lv_timer_t* timer)
                       (long)(prof_step / (prof_frames ? prof_frames : 1)),
                       (long)(prof_render / (prof_frames ? prof_frames : 1)),
                       (long)fps_value);
+        Serial.printf("[mem] int_free=%u int_max=%u psram_free=%u\r\n",
+                      (unsigned)esp_get_free_heap_size(),
+                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         prof_step = prof_render = 0;
         prof_frames = 0;
     }
