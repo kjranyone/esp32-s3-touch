@@ -1,0 +1,39 @@
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x18 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3818,len:0x508
+load:0x403c9700,len:0x4
+load:0x403c9704,len:0xad0
+load:0x403cc700,len:0x29d8
+entry 0x403c9880
+0
+D (6) ESP_PanelHost: Add host I2C[0]
+D (6) ESP_PanelHost: Install host I2C[0]
+D (6) ESP_PanelHost: Destory
+D (7) ESP_PanelBus_RGB: Create panel io @0x3fcece70
+D (217) ESP_PanelBus_I2C: Create panel io @0x3fcecf98
+230
+260
+303
+ok_user_init
+parse_json: array size = 17
+get id error
+id is null
+get name error
+name is null
+get page error
+page is null
+get rest error
+rest is null
+get rest error
+rest is null
+LOG in close
+Timer created: Timer4
+Timer created: Timer1
+Timer created: Timer2
+Timer created: Timer3
+385
+Setup done
+385

@@ -1,0 +1,16 @@
+# PlatformIO
+.pio/
+.vscode/
+.clangd
+compile_commands.json
+
+# バックアップ (大きなバイナリはコミットしない。ローカル保持用)
+backup/*.bin
+
+# 解析作業用のダンプ
+*.bin
+!docs/evidence/*.bin
+
+# OS / エディタ
+Thumbs.db
+.DS_Store
