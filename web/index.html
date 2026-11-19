@@ -1132,6 +1132,9 @@
         api.step(1 / 60);
         api.render();
       }
+      const skipFrames = Math.min(600, Math.max(0, Number(urlParams.get('f') || 0) | 0));
+      for (let i = 0; i < skipFrames; i++) api.step(1 / 60);
+      if (skipFrames > 0) api.render();
       blitLcd(true);
 
       const veil = document.getElementById('veil');

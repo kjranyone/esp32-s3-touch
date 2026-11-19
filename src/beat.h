@@ -35,6 +35,9 @@ float ally_rage(int i);
 void flash_message(const char* msg, uint16_t frames);
 
 /* インタラクション・演出トリガ */
+bool is_title();
+void enter_title();
+void force_opening();
 bool is_modal_director();
 bool notify_tap(int x, int y);
 void on_pet();
@@ -49,18 +52,18 @@ void force_ending();
 void request_full_restore();
 void dump();
 
-/* ---------- UI レイアウト定数 (fb 直接描画) ---------- */
+/* ---------- UI レイアウト定数 (fb 直接描画 / docs/UX_GUIDELINE.md 準拠) ---------- */
 constexpr int PANEL_X = 0, PANEL_Y = 56, PANEL_W = 480, PANEL_H = 352;
-constexpr int CLOSE_X = 412, CLOSE_Y = 60, CLOSE_W = 58, CLOSE_H = 30;
-constexpr int PEEKBTN_X = 304, PEEKBTN_Y = 60, PEEKBTN_W = 100, PEEKBTN_H = 30;
+constexpr int CLOSE_X = 412, CLOSE_Y = 58, CLOSE_W = 60, CLOSE_H = 44;
+constexpr int PEEKBTN_X = 276, PEEKBTN_Y = 58, PEEKBTN_W = 128, PEEKBTN_H = 44;
 
 /* BOX ボタン (HUD 右下) */
-constexpr int BOXBTN_X = 400, BOXBTN_Y = 410, BOXBTN_W = 72, BOXBTN_H = 62;
+constexpr int BOXBTN_X = 392, BOXBTN_Y = 410, BOXBTN_W = 82, BOXBTN_H = 66;
 
 /* 3択ドラフトカード / 入れ替えカード矩形 */
-constexpr int CARD_W = 146, CARD_H = 282, CARD_Y = 104;
+constexpr int CARD_W = 146, CARD_H = 292, CARD_Y = 108;
 constexpr int CARD_X[3] = {12, 167, 322};
-constexpr int SWAP_W = 146, SWAP_H = 194, SWAP_Y = 186;
+constexpr int SWAP_W = 146, SWAP_H = 212, SWAP_Y = 186;
 constexpr int SWAP_X[3] = {12, 167, 322};
 
 void render_hud(uint16_t* fb, int buf);

@@ -92,6 +92,8 @@ static bool     pend_ending = false;
 static bool     pend_unlockall = false;
 static bool     pend_hardreset = false;
 static bool     pend_reset = false;
+static bool     pend_title = false;
+static bool     pend_op = false;
 
 static void handle_tap(int x, int y)
 {
@@ -203,9 +205,11 @@ static void handle_command_line(char* line)
     if (strcmp(line, "?") == 0 || strcmp(line, "help") == 0) {
         gp::print_all();
         Serial.println("[cmd] give <v> | wave <1..50> | boss | bphase <50|30|10> | box | pick <0..2> [slot] | scout <id> | charm <id>");
-        Serial.println("[cmd] ult | win | heal | gameover | ending | unlockall | hardreset | reset | save | dump");
+        Serial.println("[cmd] ult | win | heal | gameover | ending | title | op | unlockall | hardreset | reset | save | dump");
         return;
     }
+    if (strcmp(line, "title") == 0)     { pend_title = true; return; }
+    if (strcmp(line, "op") == 0)        { pend_op = true; return; }
     if (strcmp(line, "reset") == 0)     { pend_reset = true; return; }
     if (strcmp(line, "hardreset") == 0) { pend_hardreset = true; return; }
     if (strcmp(line, "unlockall") == 0) { pend_unlockall = true; return; }
@@ -245,6 +249,7 @@ static void apply_pending_commands()
         panel_open = false; info_peek = false;
         game::hard_reset();
         beat::init();
+        beat::enter_title();
     }
     if (pend_reset) {
         pend_reset = false;
@@ -263,6 +268,7 @@ static void apply_pending_commands()
     if (pend_bphase > 0) { int pct = pend_bphase; pend_bphase = 0; panel_open = false; beat::force_boss_phase(pct); }
     if (pend_box) {
         pend_box = false;
+        if (beat::is_title()) beat::set_wave(beat::wave());
         if (!game::st.draft_open) game::open_lootbox(true);
         panel_open = true; info_peek = false;
         beat::request_full_restore();
@@ -280,6 +286,7 @@ static void apply_pending_commands()
     }
     if (pend_scout >= 0) {
         int tid = pend_scout; pend_scout = -1;
+        if (beat::is_title()) beat::set_wave(beat::wave());
         if (game::debug_grant_talent(tid)) {
             beat::on_draft_pick(1);
             Serial.printf("[cmd] scouted #%d %s\n", tid, game::TALENTS[tid].name);
@@ -287,13 +294,14 @@ static void apply_pending_commands()
     }
     if (pend_charm >= 0) {
         int cid = pend_charm; pend_charm = -1;
+        if (beat::is_title()) beat::set_wave(beat::wave());
         if (game::debug_grant_charm(cid)) {
             beat::on_draft_pick(4);
             Serial.printf("[cmd] equipped charm #%d %s\n", cid, game::CHARMS[cid].name);
         }
     }
-    if (pend_ult)  { pend_ult = false;  beat::force_ult(); }
-    if (pend_win)  { pend_win = false;  beat::force_win(); }
+    if (pend_ult)  { pend_ult = false;  if (beat::is_title()) beat::set_wave(beat::wave()); beat::force_ult(); }
+    if (pend_win)  { pend_win = false;  if (beat::is_title()) beat::set_wave(beat::wave()); beat::force_win(); }
     if (pend_gameover) { pend_gameover = false; panel_open = false; beat::force_gameover(); }
     if (pend_ending)   { pend_ending = false; panel_open = false; beat::force_ending(); }
     if (pend_save) { pend_save = false; game::save(); Serial.println("[game] saved"); }
@@ -301,6 +309,16 @@ static void apply_pending_commands()
         uint32_t w = pend_wave; pend_wave = 0;
         panel_open = false;
         beat::set_wave(w);
+    }
+    if (pend_title) {
+        pend_title = false;
+        panel_open = false; info_peek = false;
+        beat::enter_title();
+    }
+    if (pend_op) {
+        pend_op = false;
+        panel_open = false; info_peek = false;
+        beat::force_opening();
     }
 }
 
@@ -320,6 +338,7 @@ void emu_init()
     game::init();
     beat::init();
     beat::set_wave(game::st.wave_reached ? game::st.wave_reached : 1);
+    beat::enter_title();
     game::save();
 
     beat::render(canvas[1] + 56 * SCR_W, 1);
