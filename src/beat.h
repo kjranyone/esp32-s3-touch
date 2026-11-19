@@ -38,6 +38,9 @@ void flash_message(const char* msg, uint16_t frames);
 bool is_title();
 void enter_title();
 void force_opening();
+void force_map();
+void force_travel(int lane);
+bool allow_box_button();
 bool is_modal_director();
 bool notify_tap(int x, int y);
 void on_pet();
@@ -56,6 +59,8 @@ void dump();
 constexpr int PANEL_X = 0, PANEL_Y = 56, PANEL_W = 480, PANEL_H = 352;
 constexpr int CLOSE_X = 412, CLOSE_Y = 58, CLOSE_W = 60, CLOSE_H = 44;
 constexpr int PEEKBTN_X = 276, PEEKBTN_Y = 58, PEEKBTN_W = 128, PEEKBTN_H = 44;
+constexpr int TITLEBTN_X = 148, TITLEBTN_Y = 58, TITLEBTN_W = 116, TITLEBTN_H = 44;
+constexpr int SFXBTN_X = 342, SFXBTN_Y = 360, SFXBTN_W = 126, SFXBTN_H = 44;
 
 /* BOX ボタン (HUD 右下) */
 constexpr int BOXBTN_X = 392, BOXBTN_Y = 410, BOXBTN_W = 82, BOXBTN_H = 66;

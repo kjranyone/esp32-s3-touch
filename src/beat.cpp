@@ -8,6 +8,7 @@
  * - 32行内部SRAMバンド合成器 + RGB565 キャッシュパレットリマップ
  */
 #include "beat.h"
+#include "sfx.h"
 #include "game_params.h"
 #include "garden_game.h"
 #include "roguelite_data.h"
@@ -262,7 +263,11 @@ static int text_w(const char* s, int scale)
 /* ---------------- アクタ & シーン状態 ---------------- */
 enum AState : uint8_t { A_IDLE, A_WALK, A_WINDUP, A_STRIKE, A_RECOVER, A_HURT, A_DOWN, A_SPECIAL, A_VICTORY };
 enum EType  : uint8_t { E_SLIME, E_BAT, E_GOLEM, E_BOSS };
-enum DirectorMode : uint8_t { DIR_TITLE, DIR_OPENING, DIR_BATTLE, DIR_BOSS_INTRO, DIR_WAVE_CLEAR, DIR_BOSS_VICTORY, DIR_GAME_OVER, DIR_ENDING };
+enum DirectorMode : uint8_t {
+    DIR_TITLE, DIR_OPENING,
+    DIR_MAP, DIR_TRAVEL, DIR_CAMP, DIR_TREASURE, DIR_EVENT,
+    DIR_BATTLE, DIR_BOSS_INTRO, DIR_WAVE_CLEAR, DIR_BOSS_VICTORY, DIR_GAME_OVER, DIR_ENDING
+};
 
 struct Actor {
     bool alive = false;
@@ -331,6 +336,14 @@ static uint32_t rngs = 13371;
 static DirectorMode dir_mode = DIR_BATTLE;
 static uint16_t dir_timer = 0;
 static uint16_t dir_total = 1;
+static game::NodeKind cur_node_kind = game::NODE_BATTLE;
+static game::NodeKind travel_target_kind = game::NODE_BATTLE;
+static uint8_t travel_target_lane = 1;
+static uint8_t cur_event_id = 0;
+static bool    treasure_opened = false;
+static uint16_t node_exit_timer = 0;
+static bool    battle_is_elite = false;
+static float   landmark_x = 0.0f;
 static double win_bonus_shown = 0.0;
 static float boss_hp_trail = 0.0f;
 static float boss_down_x = 0.0f, boss_down_y = 0.0f;
@@ -697,6 +710,7 @@ void request_full_restore()
 
 void on_pet()
 {
+    sfx::play(sfx::SFX_PET);
     for (int i = 0; i < ALLY_N; ++i) {
         Actor& a = allies[i];
         if (!a.alive) continue;
@@ -716,6 +730,7 @@ void on_pet()
 
 void on_draft_pick(int pick_result)
 {
+    sfx::play(sfx::SFX_DRAFT_PICK);
     sync_party(false);
     for (auto& a : allies) {
         if (!a.alive || a.state == A_DOWN) continue;
@@ -838,6 +853,7 @@ void force_opening()
 
 static void leave_title_to_battle(bool new_run)
 {
+    sfx::play(sfx::SFX_CONFIRM);
     if (new_run || !has_saved_progress()) {
         enter_opening(new_run);
         return;
@@ -862,9 +878,276 @@ static void leave_title_to_battle(bool new_run)
     request_full_restore();
 }
 
+static constexpr int MAP_NX = 152, MAP_NW = 148, MAP_NH = 70;
+static constexpr int MAP_NY[3] = {54, 140, 226};
+static constexpr uint16_t TRAVEL_DURATION = 72;
+
+static void enter_map()
+{
+    if (wave_n >= 50) {
+        dir_mode = DIR_ENDING;
+        dir_timer = 0; dir_total = 1;
+        request_full_restore();
+        return;
+    }
+    memset(enemies, 0, sizeof(enemies));
+    memset(fxs, 0, sizeof(fxs));
+    wave_active = false;
+    battle_is_elite = false;
+    node_exit_timer = 0;
+    dir_mode = DIR_MAP;
+    dir_timer = 0;
+    dir_total = 1;
+    cutin_draw = 0;
+    phase_banner_t = 0;
+    request_full_restore();
+}
+
+void force_map()
+{
+    enter_map();
+    Serial.printf("[cmd] opened route map after step %u/50\r\n", (unsigned)wave_n);
+}
+
+static void start_travel(uint8_t lane)
+{
+    sfx::play(sfx::SFX_CONFIRM);
+    if (lane > 2) lane = 1;
+    uint32_t next_step = (wave_n < 50) ? (wave_n + 1) : 50;
+    travel_target_lane = lane;
+    travel_target_kind = game::map_node_kind(next_step, lane);
+    wave_n = next_step;
+    game::st.wave_reached = wave_n;
+    game::st.map_lane = lane;
+    game::save();
+
+    memset(enemies, 0, sizeof(enemies));
+    memset(fxs, 0, sizeof(fxs));
+    sync_party(false);
+    int idx = 0;
+    for (int i = 0; i < ALLY_N; ++i) {
+        Actor& a = allies[i];
+        if (!a.alive) continue;
+        if (a.state == A_DOWN) { a.state = A_IDLE; a.hp = a.hpmax * 0.35f; }
+        a.x = cam_x + 150.0f - idx * 42.0f;
+        a.y = 224.0f + ((idx == 1) ? -16.0f : (idx == 2 ? 16.0f : 0.0f));
+        a.z = 0.0f; a.vz = 0.0f; a.vx = 0.0f; a.vy = 0.0f;
+        a.dir = 1;
+        a.state = A_WALK;
+        idx++;
+    }
+    landmark_x = cam_x + FB_W + 140.0f;
+    cur_node_kind = travel_target_kind;
+    wave_active = false;
+    battle_is_elite = false;
+    node_exit_timer = 0;
+    treasure_opened = false;
+    dir_mode = DIR_TRAVEL;
+    dir_timer = 0;
+    dir_total = TRAVEL_DURATION;
+    request_full_restore();
+}
+
+void force_travel(int lane)
+{
+    if (lane < 0) lane = 0;
+    if (lane > 2) lane = 2;
+    start_travel((uint8_t)lane);
+}
+
+static void arrive_at_node()
+{
+    cur_node_kind = travel_target_kind;
+    for (int i = 0; i < ALLY_N; ++i) {
+        Actor& a = allies[i];
+        if (!a.alive) continue;
+        a.vx = 0.0f; a.vy = 0.0f; a.z = 0.0f; a.vz = 0.0f;
+        a.dir = 1;
+        a.state = A_IDLE;
+        a.home_x = a.x;
+    }
+
+    if (cur_node_kind == game::NODE_CAMP) {
+        landmark_x = cam_x + 344.0f;
+        dir_mode = DIR_CAMP;
+        dir_timer = 0; node_exit_timer = 0;
+    } else if (cur_node_kind == game::NODE_TREASURE) {
+        landmark_x = cam_x + 344.0f;
+        dir_mode = DIR_TREASURE;
+        dir_timer = 0; treasure_opened = false; node_exit_timer = 0;
+    } else if (cur_node_kind == game::NODE_EVENT) {
+        landmark_x = cam_x + 344.0f;
+        cur_event_id = (uint8_t)(rnd() % 3);
+        dir_mode = DIR_EVENT;
+        dir_timer = 0; node_exit_timer = 0;
+    } else {
+        battle_is_elite = (cur_node_kind == game::NODE_ELITE);
+        dir_mode = DIR_BATTLE;
+        dir_timer = 0;
+        wave_active = false;
+        wave_timer = 12;
+        if (battle_is_elite) {
+            flash_message("ELITE! X2 + BOX", 52);
+            special_flash = 4;
+        }
+    }
+    request_full_restore();
+}
+
+static void resolve_camp_choice(int choice)
+{
+    if (node_exit_timer > 0) return;
+    sfx::play(choice == 0 ? sfx::SFX_CAMP_REST : sfx::SFX_CRYSTAL);
+    if (choice == 0) {
+        /* REST: 全員 HP +60% & 蘇生 & 状態異常回復 */
+        for (int i = 0; i < ALLY_N; ++i) {
+            Actor& a = allies[i];
+            if (!a.alive) continue;
+            if (a.state == A_DOWN) { a.state = A_IDLE; a.hp = a.hpmax * 0.60f; }
+            else {
+                float heal = a.hpmax * 0.60f;
+                a.hp = fminf(a.hpmax, a.hp + heal);
+                add_num_fx(a.x, a.y - 42, 0.0f, FX_HEAL_NUM, (int32_t)heal, 36);
+            }
+            a.poison_t = a.burn_t = a.slow_t = 0;
+            spawn_vfx_sprite(a.x, a.y - 44, 0.0f, vfx_sprites::FXS_HEART_BUFF, 1, 34, 1, 1, 4, true, 256);
+        }
+        flash_message("PARTY RESTED +60%", 44);
+    } else {
+        /* TRAIN: クリスタル +50 & 全員 MP 100% フルチャージ */
+        double bonus = 40.0 + wave_n * 4.0;
+        game::add_drops(bonus, 0);
+        for (int i = 0; i < ALLY_N; ++i) {
+            Actor& a = allies[i];
+            if (!a.alive || a.state == A_DOWN) continue;
+            a.rage = 100.0f;
+            a.z = 1.0f; a.vz = 3.2f; set_squash(a, 1, 5);
+            spawn_vfx_sprite(a.x, a.y - 18, 0.0f, vfx_sprites::FXS_MIRA_BURST_0, 3, 3, 1, 1, 0, true, 256);
+        }
+        char msg[24];
+        snprintf(msg, sizeof(msg), "+%d C & FULL MP!", (int)bonus);
+        flash_message(msg, 44);
+    }
+    game::save();
+    node_exit_timer = 44;
+}
+
+static void resolve_treasure_open()
+{
+    if (treasure_opened || node_exit_timer > 0) return;
+    sfx::play(sfx::SFX_CHEST_OPEN);
+    treasure_opened = true;
+    double bonus = 48.0 + wave_n * 11.0;
+    game::add_drops(bonus, 0);
+    game::grant_free_box(1);
+    special_flash = 5;
+    spawn_vfx_sprite(landmark_x, 214.0f, 8.0f, vfx_sprites::FXS_SHOCKWAVE_0, 4, 3, 1, 1, 0, true, 260);
+    spawn_vfx_sprite(landmark_x, 194.0f, 16.0f, vfx_sprites::FXS_MIRA_BURST_0, 3, 4, 1, 1, 0, true, 256);
+    add_num_fx(landmark_x, 178.0f, 12.0f, FX_DROP_TEXT, (int32_t)bonus, 40);
+    for (int i = 0; i < ALLY_N; ++i) {
+        if (allies[i].alive && allies[i].state != A_DOWN) {
+            allies[i].z = 1.0f; allies[i].vz = 3.4f; set_squash(allies[i], 1, 5);
+        }
+    }
+    char msg[26];
+    snprintf(msg, sizeof(msg), "+%d C + FREE BOX!", (int)bonus);
+    flash_message(msg, 48);
+    node_exit_timer = 50;
+}
+
+static void resolve_event_choice(int choice)
+{
+    if (node_exit_timer > 0) return;
+    sfx::play(sfx::SFX_EVENT_GOOD);
+    if (cur_event_id == 0) {
+        /* 0: BLOOD ALTAR */
+        if (choice == 0) {
+            for (int i = 0; i < ALLY_N; ++i) {
+                Actor& a = allies[i];
+                if (!a.alive || a.state == A_DOWN) continue;
+                float loss = a.hpmax * 0.25f;
+                a.hp = fmaxf(1.0f, a.hp - loss);
+                a.flash = 4;
+            }
+            double bonus = 75.0 + wave_n * 9.0;
+            game::add_drops(bonus, 0);
+            game::grant_free_box(1);
+            special_flash = 5;
+            flash_message("ALTAR: +BOX & C!", 46);
+        } else {
+            for (int i = 0; i < ALLY_N; ++i) {
+                Actor& a = allies[i];
+                if (!a.alive || a.state == A_DOWN) continue;
+                a.hp = fminf(a.hpmax, a.hp + a.hpmax * 0.18f);
+            }
+            flash_message("MOVED ON +18% HP", 42);
+        }
+    } else if (cur_event_id == 1) {
+        /* 1: CRYSTAL WELL */
+        if (choice == 0 && game::st.crystals >= 30.0) {
+            game::st.crystals -= 30.0;
+            if ((rnd() % 100) < 65) {
+                double win = 95.0 + wave_n * 10.0;
+                game::add_drops(win, 0);
+                special_flash = 5;
+                char msg[24];
+                snprintf(msg, sizeof(msg), "JACKPOT! +%d C", (int)win);
+                flash_message(msg, 46);
+            } else {
+                for (int i = 0; i < ALLY_N; ++i) {
+                    if (!allies[i].alive) continue;
+                    allies[i].state = A_IDLE;
+                    allies[i].hp = allies[i].hpmax;
+                    allies[i].rage = 100.0f;
+                }
+                flash_message("BLESSED! FULL HP", 46);
+            }
+        } else {
+            for (int i = 0; i < ALLY_N; ++i) {
+                Actor& a = allies[i];
+                if (!a.alive || a.state == A_DOWN) continue;
+                a.hp = fminf(a.hpmax, a.hp + a.hpmax * 0.30f);
+                spawn_vfx_sprite(a.x, a.y - 42, 0.0f, vfx_sprites::FXS_HEART_BUFF, 1, 30, 1, 1, 4, true, 256);
+            }
+            flash_message("DRANK WELL +30%", 44);
+        }
+    } else {
+        /* 2: ANCIENT FORGE */
+        if (choice == 0) {
+            int cid = game::grant_random_charm();
+            special_flash = 5;
+            if (cid >= 0) {
+                char msg[26];
+                snprintf(msg, sizeof(msg), "GOT %.14s!", game::CHARMS[cid].name);
+                flash_message(msg, 48);
+            } else {
+                game::add_drops(80.0 + wave_n * 8.0, 0);
+                flash_message("FORGE BONUS!", 44);
+            }
+        } else {
+            double bonus = 60.0 + wave_n * 7.0;
+            game::add_drops(bonus, 0);
+            char msg[24];
+            snprintf(msg, sizeof(msg), "SALVAGED +%d C!", (int)bonus);
+            flash_message(msg, 44);
+        }
+    }
+    game::save();
+    node_exit_timer = 44;
+}
+
+bool allow_box_button()
+{
+    return dir_mode == DIR_BATTLE || dir_mode == DIR_MAP ||
+           dir_mode == DIR_BOSS_INTRO || dir_mode == DIR_WAVE_CLEAR || dir_mode == DIR_BOSS_VICTORY;
+}
+
 bool is_modal_director()
 {
-    return dir_mode == DIR_TITLE || dir_mode == DIR_OPENING || dir_mode == DIR_GAME_OVER || dir_mode == DIR_ENDING;
+    return dir_mode == DIR_TITLE || dir_mode == DIR_OPENING ||
+           dir_mode == DIR_MAP || dir_mode == DIR_TRAVEL ||
+           dir_mode == DIR_CAMP || dir_mode == DIR_TREASURE || dir_mode == DIR_EVENT ||
+           dir_mode == DIR_GAME_OVER || dir_mode == DIR_ENDING;
 }
 
 bool notify_tap(int x, int y)
@@ -886,6 +1169,48 @@ bool notify_tap(int x, int y)
         if (dir_timer >= 12) {
             finish_opening_to_wave1();
             return true;
+        }
+        return false;
+    }
+    if (dir_mode == DIR_MAP) {
+        if (dir_timer < 8) return false;
+        int by = y - 56;
+        for (int lane = 0; lane < 3; ++lane) {
+            if (!game::map_edge_exists(wave_n, game::st.map_lane, lane)) continue;
+            if (x >= MAP_NX && x < MAP_NX + MAP_NW && by >= MAP_NY[lane] && by < MAP_NY[lane] + MAP_NH) {
+                start_travel((uint8_t)lane);
+                return true;
+            }
+        }
+        return false;
+    }
+    if (dir_mode == DIR_TRAVEL) {
+        if (dir_timer >= 16) {
+            arrive_at_node();
+            return true;
+        }
+        return false;
+    }
+    if (dir_mode == DIR_CAMP) {
+        if (dir_timer < 10 || node_exit_timer > 0) return false;
+        int by = y - 56;
+        if (by >= 264 && by < 340) {
+            if (x >= 16 && x < 236) { resolve_camp_choice(0); return true; }
+            if (x >= 244 && x < 464) { resolve_camp_choice(1); return true; }
+        }
+        return false;
+    }
+    if (dir_mode == DIR_TREASURE) {
+        if (dir_timer < 10 || node_exit_timer > 0) return false;
+        resolve_treasure_open();
+        return true;
+    }
+    if (dir_mode == DIR_EVENT) {
+        if (dir_timer < 10 || node_exit_timer > 0) return false;
+        int by = y - 56;
+        if (by >= 264 && by < 340) {
+            if (x >= 16 && x < 236) { resolve_event_choice(0); return true; }
+            if (x >= 244 && x < 464) { resolve_event_choice(1); return true; }
         }
         return false;
     }
@@ -1039,8 +1364,8 @@ static void start_wave()
     int main_dir = (cx < STAGE_W * 0.5f) ? 1 : -1;
 
     bool boss_wave = (wave_n % 5 == 0);
-    int n = 3 + (int)(wave_n / 4);
-    if (n > 6) n = 6;
+    int n = 3 + (int)(wave_n / 4) + (battle_is_elite ? 1 : 0);
+    if (n > 7) n = 7;
     if (boss_wave) {
         Actor* b = spawn_enemy(E_BOSS, cx + main_dir * 220.0f, (BELT_Y0 + BELT_Y1) * 0.52f);
         if (b) {
@@ -1049,6 +1374,7 @@ static void start_wave()
             b->state = A_SPECIAL;
             b->timer = 40;
             dir_mode = DIR_BOSS_INTRO;
+            sfx::play(sfx::SFX_BOSS_WARN);
             uint32_t cf = gp::g.cutin_frames;
             if (cf < 36) cf = 36;
             if (cf > 180) cf = 180;
@@ -1060,12 +1386,19 @@ static void start_wave()
     for (int i = 0; i < n; i++) {
         int t = E_SLIME;
         uint32_t r = rnd() % 100;
-        if (wave_n >= 2 && r < 34) t = E_BAT;
-        if (wave_n >= 3 && r >= 34 && r < 56) t = E_GOLEM;
+        if (battle_is_elite && i == 0) t = E_GOLEM;
+        else {
+            if (wave_n >= 2 && r < 34) t = E_BAT;
+            if (wave_n >= 3 && r >= 34 && r < 56) t = E_GOLEM;
+        }
         bool flank = (i >= 2 && (i % 3 == 2) && cx > 240.0f && cx < STAGE_W - 240.0f);
         int side = flank ? -main_dir : main_dir;
         float dist = flank ? (160.0f + frand(0, 60)) : (180.0f + (float)(i * 42) + frand(0, 35));
-        spawn_enemy(t, cx + side * dist);
+        Actor* e = spawn_enemy(t, cx + side * dist);
+        if (e && battle_is_elite) {
+            e->hpmax *= 1.32f;
+            e->hp = e->hpmax;
+        }
     }
 }
 
@@ -1158,6 +1491,7 @@ static inline void integrate_vel(Actor& a, float min_x, float max_x, float damp 
 
 static void spawn_bolt(int ally_idx, const Actor* t, float dmg, float vy_off, uint8_t bolt_mode = 0)
 {
+    sfx::play(sfx::SFX_PROJ_SHOOT);
     const Actor& a = allies[ally_idx];
     Fx* slot = alloc_fx();
     *slot = Fx();
@@ -1293,6 +1627,7 @@ static void hit_enemy(Actor& e, float dmg, int8_t dir, bool big, int src_ally, f
     e.hp = new_hp;
     e.flash = 3;
     bool heavy = big || crit;
+    sfx::play(crit ? sfx::SFX_HIT_CRIT : (big ? sfx::SFX_HIT_HEAVY : sfx::SFX_HIT_LIGHT));
 
     /* 凍結・スロウ付与 */
     if (game::st.mods.frost_slow > 0 && ((int)(rnd() % 100) < game::st.mods.frost_slow)) {
@@ -1365,6 +1700,7 @@ static void hit_enemy(Actor& e, float dmg, int8_t dir, bool big, int src_ally, f
         e.timer = (e.type == E_BOSS) ? 95 : 58;
 
         double drop = (e.type == E_BOSS) ? (75.0 + wave_n * 18.0) : (9.0 + wave_n * 4.5);
+        if (battle_is_elite) drop *= 1.8;
         game::add_drops(drop, party_scavenger_pct());
         add_num_fx(e.x, e.y - 32, e.z, FX_DROP_TEXT, (int32_t)drop, 38);
 
@@ -1391,12 +1727,14 @@ static void hit_enemy(Actor& e, float dmg, int8_t dir, bool big, int src_ally, f
         }
 
         if (e.type == E_BOSS) {
+            sfx::play(sfx::SFX_HIT_HEAVY);
             boss_down_x = e.x;
             boss_down_y = e.y;
             special_flash = 4;
             add_shake(5, 18);
             spawn_vfx_sprite(e.x, e.y - 36, e.z, vfx_sprites::FXS_EXPLODE_0, 6, 3, 1, 1, 0, true, 320);
         } else {
+            sfx::play(sfx::SFX_ENEMY_KO);
             spawn_vfx_sprite(e.x, e.y - 24, e.z, vfx_sprites::FXS_EXPLODE_0, 6, 3, 1, 1, 0, true, 224);
             spawn_crystal_gems(e.x, e.y, e.z, 3);
         }
@@ -1440,6 +1778,7 @@ static void hurt_ally(Actor& a, float dmg, int8_t dir, bool is_chip, uint8_t ail
     if (dmg > 0.0f) {
         a.hp -= dmg;
         if (!is_chip) {
+            sfx::play(sfx::SFX_HURT_ALLY);
             a.flash = 3;
             a.state = A_HURT; a.timer = 8;
             a.vx = dir * 2.6f; a.vy = frand(-0.7f, 0.7f);
@@ -1545,6 +1884,7 @@ static void try_special(Actor& a, int ally_idx)
     if (a.state != A_IDLE && a.state != A_WALK) return;
 
     const auto& td = game::TALENTS[a.talent_id];
+    sfx::play(sfx::SFX_ULT_CAST);
     a.rage = 0.0f;
     a.state = A_SPECIAL;
     a.timer = 42;
@@ -2607,6 +2947,7 @@ void step()
         } else if (f < 215) {
             /* Scene 3: ルミ覚醒＆魔王撤退 */
             if (f == 140) {
+                sfx::play(sfx::SFX_ULT_CAST);
                 special_flash = 6;
                 add_shake(4, 10);
                 if (lumi.alive) {
@@ -2658,6 +2999,79 @@ void step()
         return;
     }
 
+    if (dir_mode == DIR_MAP) {
+        if (dir_timer < 60000) dir_timer++;
+        fx_step();
+        return;
+    }
+
+    if (dir_mode == DIR_TRAVEL) {
+        uint16_t f = dir_timer++;
+        /* ベルトスクロール行軍アニメーション: 背景高速スクロール + 隊列駆足 + ランドマーク登場 */
+        float speed = (f < 52) ? 4.8f : (4.8f * (float)(TRAVEL_DURATION - f) / 20.0f);
+        if (speed < 0.0f) speed = 0.0f;
+        cam_x += speed;
+        if (cam_x > STAGE_W - FB_W - 40.0f) cam_x -= 480.0f;
+
+        int idx = 0;
+        for (int i = 0; i < ALLY_N; ++i) {
+            Actor& a = allies[i];
+            if (!a.alive) continue;
+            a.x = cam_x + 160.0f - idx * 44.0f;
+            a.y = 224.0f + ((idx == 1) ? -16.0f : (idx == 2 ? 16.0f : 0.0f));
+            a.dir = 1;
+            a.state = (f < 64) ? A_WALK : A_IDLE;
+            if (f < 58 && ((f + idx * 5) % 14) == 0) {
+                if (idx == 0) sfx::play(sfx::SFX_STEP);
+                spawn_vfx_sprite(a.x - 10, a.y + 2, 0.0f, vfx_sprites::FXS_DUST_0, 3, 2, -1, 0, 1);
+            }
+            idx++;
+        }
+
+        /* 後半 (f = 24..72): 目的地ランドマークが画面右端からスクロールして目の前へ到着 */
+        if (travel_target_kind == game::NODE_CAMP ||
+            travel_target_kind == game::NODE_TREASURE ||
+            travel_target_kind == game::NODE_EVENT) {
+            float prog = (f < 24) ? 0.0f : ((float)(f - 24) / (float)(TRAVEL_DURATION - 24));
+            if (prog > 1.0f) prog = 1.0f;
+            float ease = 1.0f - (1.0f - prog) * (1.0f - prog);
+            landmark_x = cam_x + (FB_W + 64.0f) + (344.0f - (FB_W + 64.0f)) * ease;
+        }
+        fx_step();
+        if (dir_timer >= TRAVEL_DURATION) {
+            arrive_at_node();
+        }
+        return;
+    }
+
+    if (dir_mode == DIR_CAMP || dir_mode == DIR_TREASURE || dir_mode == DIR_EVENT) {
+        if (dir_timer < 60000) dir_timer++;
+        for (int i = 0; i < ALLY_N; ++i) {
+            Actor& a = allies[i];
+            if (!a.alive) continue;
+            a.dir = 1;
+            if (a.z > 0.0f || a.vz != 0.0f) {
+                a.z += a.vz; a.vz -= GRAV_GROUND_UNIT;
+                if (a.z <= 0.0f) { a.z = 0.0f; a.vz = 0.0f; set_squash(a, 2, 5); }
+            }
+        }
+        if (dir_mode == DIR_CAMP && (dir_timer % 20) == 0) {
+            spawn_vfx_sprite(landmark_x + frand(-8, 8), 204.0f, frand(6, 20),
+                             vfx_sprites::FXS_MIRA_BURST_0, 3, 4, 1, 1, 4, true, 160);
+        } else if (dir_mode == DIR_TREASURE && !treasure_opened && (dir_timer % 24) == 0) {
+            spawn_vfx_sprite(landmark_x + frand(-14, 14), 196.0f, frand(8, 26),
+                             vfx_sprites::FXS_MIRA_BURST_0, 3, 4, 1, 1, 4, true, 180);
+        } else if (dir_mode == DIR_EVENT && (dir_timer % 22) == 0) {
+            spawn_vfx_sprite(landmark_x + frand(-12, 12), 190.0f, frand(10, 30),
+                             vfx_sprites::FXS_MIRA_BURST_0, 3, 4, 1, 1, 4, true, 200);
+        }
+        fx_step();
+        if (node_exit_timer > 0 && --node_exit_timer == 0) {
+            enter_map();
+        }
+        return;
+    }
+
     if (dir_mode == DIR_GAME_OVER || dir_mode == DIR_ENDING) {
         if (dir_timer < 60000) dir_timer++;
         if (dir_mode == DIR_ENDING && (dir_timer % 18 == 0)) {
@@ -2676,6 +3090,7 @@ void step()
             if (elapsed >= 18 && boss->z > 0.0f) {
                 boss->z += boss->vz; boss->vz -= 0.7f;
                 if (boss->z <= 0.0f) {
+                    sfx::play(sfx::SFX_HIT_HEAVY);
                     boss->z = 0.0f; boss->vz = 0.0f; set_squash(*boss, 2, 8);
                     spawn_vfx_sprite(boss->x, boss->y, 0.0f, vfx_sprites::FXS_SHOCKWAVE_0, 4, 4, 1, 1, 0, false, 300);
                     spawn_vfx_sprite(boss->x - 24, boss->y + 4, 0.0f, vfx_sprites::FXS_DUST_0, 3, 3, -1, 0, 1);
@@ -2724,11 +3139,8 @@ void step()
         fx_step();
         if (--dir_timer == 0) {
             bool was_boss = (dir_mode == DIR_BOSS_VICTORY);
-            wave_n++;
-            if (wave_n > 50) wave_n = 50;
-            game::st.wave_reached = wave_n;
             for (auto& e : enemies) e = Actor();
-            /* ローグライト仕様: ウェーブ間は部分回復 (通常12% / ボス撃破45% + CAMP TEA) */
+            /* ウェーブ間は部分回復 (通常12% / ボス撃破45% + CAMP TEA) してルートマップへ */
             float hfrac = (was_boss ? 0.45f : (gp::g.wave_heal_pct / 100.0f)) + (game::st.mods.wave_heal_pct / 100.0f);
             for (int i = 0; i < ALLY_N; ++i) {
                 Actor& a = allies[i];
@@ -2744,8 +3156,7 @@ void step()
                 a.z = 0.0f; a.vz = 0.0f; a.vx = 0.0f; a.vy = 0.0f;
                 a.invuln = true; a.invuln_t = 24;
             }
-            dir_mode = DIR_BATTLE;
-            wave_timer = 22;
+            enter_map();
         }
         return;
     }
@@ -2819,6 +3230,7 @@ void step()
                 game::on_run_end(wave_n, false);
                 flash_frames = 0; phase_banner_t = 0; cutin_draw = 0;
                 dir_mode = DIR_GAME_OVER;
+                sfx::play(sfx::SFX_GAME_OVER);
                 dir_timer = 0; dir_total = 1;
                 invalidate_all_bands();
             }
@@ -2826,6 +3238,10 @@ void step()
             wave_active = false;
             bool was_boss = (wave_n % 5 == 0);
             double clear_bonus = was_boss ? (65.0 + wave_n * 22.0) : (16.0 + wave_n * 7.2);
+            if (battle_is_elite) {
+                clear_bonus *= 1.8;
+                game::grant_free_box(1);
+            }
             game::add_drops(clear_bonus, party_scavenger_pct());
             win_bonus_shown = clear_bonus;
 
@@ -2842,15 +3258,18 @@ void step()
                 flash_frames = 0; phase_banner_t = 0; cutin_draw = 0;
                 spawn_confetti_burst(cam_x + FB_W * 0.5f, BELT_Y0 + 60.0f, 90.0f, 24);
                 dir_mode = DIR_ENDING;
+                sfx::play(sfx::SFX_ENDING);
                 dir_timer = 0; dir_total = 1;
                 invalidate_all_bands();
             } else if (was_boss) {
                 dir_mode = DIR_BOSS_VICTORY;
+                sfx::play(sfx::SFX_BOSS_WIN);
                 uint32_t vf = gp::g.victory_frames;
                 if (vf < 64) vf = 64; if (vf > 240) vf = 240;
                 dir_total = (uint16_t)vf; dir_timer = dir_total;
             } else {
                 dir_mode = DIR_WAVE_CLEAR;
+                sfx::play(sfx::SFX_WAVE_CLEAR);
                 dir_total = 56; dir_timer = 56;
                 spawn_confetti_burst(cam_x + FB_W * 0.5f, BELT_Y0 + 60.0f, 80.0f, 10);
             }
@@ -3074,9 +3493,277 @@ static void draw_fx_band(uint16_t* band, int by, int bh, PreparedFx& pf)
     }
 }
 
-/* ---------------- オーバーレイ (ボスHP/Phase通知/カットイン/タイトル/OP/GameOver/Ending) ---------------- */
+/* ---------------- オーバーレイ用ライン & ランドマーク描画 ---------------- */
+static void draw_line_band(uint16_t* band, int by, int bh, int x0, int y0, int x1, int y1, int thick, uint16_t col)
+{
+    int dx = abs(x1 - x0), dy = abs(y1 - y0);
+    int steps = (dx > dy) ? dx : dy;
+    if (steps <= 0) { fill_rect_band(band, by, bh, x0, y0, thick, thick, col); return; }
+    for (int i = 0; i <= steps; i += 2) {
+        int px = x0 + (x1 - x0) * i / steps;
+        int py = y0 + (y1 - y0) * i / steps;
+        fill_rect_band(band, by, bh, px - thick / 2, py - thick / 2, thick, thick, col);
+    }
+}
+
+static uint16_t node_color(game::NodeKind k)
+{
+    switch (k) {
+    case game::NODE_BATTLE:   return C_AQUA;
+    case game::NODE_ELITE:    return C_RED;
+    case game::NODE_CAMP:     return C_MINT;
+    case game::NODE_TREASURE: return C_GOLD;
+    case game::NODE_EVENT:    return C_VIOLET;
+    case game::NODE_BOSS:     return RGB(0xFF, 0x50, 0x70);
+    default:                  return C_WHITE;
+    }
+}
+
+static const char* node_sub_tag(game::NodeKind k)
+{
+    switch (k) {
+    case game::NODE_BATTLE:   return "+CRYS";
+    case game::NODE_ELITE:    return "X2+BOX";
+    case game::NODE_CAMP:     return "HEAL";
+    case game::NODE_TREASURE: return "FREE!";
+    case game::NODE_EVENT:    return "???";
+    case game::NODE_BOSS:     return "DANGER";
+    default:                  return "";
+    }
+}
+
+static void draw_campfire_band(uint16_t* band, int by, int bh, int sx, int sy)
+{
+    int fl = (int)((frame / 4) & 3);
+    int foff = (fl & 1) ? -2 : 2;
+    draw_shadow_band(band, by, bh, sx, sy + 4, 24);
+    /* 石囲い & 薪 */
+    fill_rect_band(band, by, bh, sx - 24, sy - 4, 48, 10, RGB(0x4A, 0x54, 0x64));
+    fill_rect_band(band, by, bh, sx - 18, sy - 8, 36, 8, RGB(0x6E, 0x3C, 0x1E));
+    fill_rect_band(band, by, bh, sx - 12, sy - 10, 24, 6, RGB(0x8E, 0x52, 0x26));
+    /* ゆらめく3層炎 */
+    fill_rect_band(band, by, bh, sx - 14, sy - 26 - (fl & 1) * 3, 28, 20, C_RED);
+    fill_rect_band(band, by, bh, sx - 10 + foff / 2, sy - 34 - ((fl + 1) & 1) * 4, 20, 24, C_ORANGE);
+    fill_rect_band(band, by, bh, sx - 5 - foff / 2, sy - 28, 10, 16, C_GOLD);
+    fill_rect_band(band, by, bh, sx - 3, sy - 20, 6, 8, C_WHITE);
+    /* 火の粉 */
+    fill_rect_band(band, by, bh, sx - 10 + foff * 2, sy - 44 - (fl * 4), 4, 4, C_GOLD);
+    fill_rect_band(band, by, bh, sx + 8 - foff * 2, sy - 38 - (((fl + 2) & 3) * 4), 4, 4, C_ORANGE);
+}
+
+static void draw_chest_band(uint16_t* band, int by, int bh, int sx, int sy, bool opened)
+{
+    draw_shadow_band(band, by, bh, sx, sy + 6, 28);
+    /* 宝箱本体 */
+    fill_rect_band(band, by, bh, sx - 26, sy - 28, 52, 32, RGB(0x5A, 0x30, 0x16));
+    draw_rect_frame_band(band, by, bh, sx - 26, sy - 28, 52, 32, 3, C_GOLD);
+    if (!opened) {
+        /* 閉じた蓋 + 宝石留め金 */
+        fill_rect_band(band, by, bh, sx - 28, sy - 42, 56, 16, RGB(0x74, 0x3E, 0x1C));
+        draw_rect_frame_band(band, by, bh, sx - 28, sy - 42, 56, 16, 3, C_GOLD);
+        fill_rect_band(band, by, bh, sx - 6, sy - 32, 12, 14, C_GOLD);
+        fill_rect_band(band, by, bh, sx - 3, sy - 29, 6, 8, C_AQUA);
+    } else {
+        /* 開いた蓋 + 溢れるクリスタル光 */
+        fill_rect_band(band, by, bh, sx - 28, sy - 54, 56, 12, RGB(0x74, 0x3E, 0x1C));
+        draw_rect_frame_band(band, by, bh, sx - 28, sy - 54, 56, 12, 2, C_GOLD);
+        fill_rect_band(band, by, bh, sx - 20, sy - 40, 40, 14, C_AQUA);
+        fill_rect_band(band, by, bh, sx - 12, sy - 36, 24, 8, C_WHITE);
+    }
+}
+
+static void draw_altar_band(uint16_t* band, int by, int bh, int sx, int sy)
+{
+    int bob = (int)(sinf(frame * 0.10f) * 4.0f);
+    draw_shadow_band(band, by, bh, sx, sy + 4, 28);
+    /* 石段台座 */
+    fill_rect_band(band, by, bh, sx - 28, sy - 8, 56, 12, RGB(0x3A, 0x42, 0x58));
+    fill_rect_band(band, by, bh, sx - 20, sy - 22, 40, 16, RGB(0x4E, 0x56, 0x72));
+    draw_rect_frame_band(band, by, bh, sx - 20, sy - 22, 40, 16, 2, C_VIOLET);
+    /* 浮遊する神秘クリスタル */
+    fill_rect_band(band, by, bh, sx - 10, sy - 56 + bob, 20, 28, C_VIOLET);
+    fill_rect_band(band, by, bh, sx - 6, sy - 62 + bob, 12, 40, C_AQUA);
+    fill_rect_band(band, by, bh, sx - 3, sy - 54 + bob, 6, 22, C_WHITE);
+}
+
+/* ---------------- オーバーレイ (ボスHP/Phase通知/カットイン/タイトル/OP/マップ/行軍/イベント/GameOver/Ending) ---------------- */
 static void draw_overlays_band(uint16_t* band, int by, int bh)
 {
+    /* 0c. STS/Peglin 風ルート分岐マップ (DIR_MAP) */
+    if (dir_mode == DIR_MAP) {
+        const bool pulse = ((dir_timer / 20) & 1) == 0;
+        fill_rect_band(band, by, bh, 0, 0, FB_W, FB_H, RGB(0x0B, 0x10, 0x1E));
+        draw_rect_frame_band(band, by, bh, 4, 4, FB_W - 8, FB_H - 8, 2, RGB(0x28, 0x42, 0x6E));
+
+        /* ヘッダ: 章名 & ボスまでの残り歩数 */
+        const char* ch = game::chapter_name(wave_n + 1);
+        draw_text_shadow_band(band, by, bh, 16, 16, ch, 2, C_GOLD);
+        uint32_t to_boss = 5 - ((wave_n) % 5);
+        char bdist[18];
+        if (to_boss == 1) snprintf(bdist, sizeof(bdist), "NEXT: BOSS!");
+        else snprintf(bdist, sizeof(bdist), "BOSS IN %u", (unsigned)to_boss);
+        draw_text_shadow_band(band, by, bh, FB_W - 16 - text_w(bdist, 2), 16, bdist, 2,
+                              (to_boss == 1) ? C_RED : C_AQUA);
+        fill_rect_band(band, by, bh, 12, 38, FB_W - 24, 2, RGB(0x26, 0x3C, 0x64));
+
+        /* 座標定義: 左=現在地, 中央=次の選択ノード (wave_n+1), 右=1歩先プレビュー (wave_n+2) */
+        const int cur_lane = game::st.map_lane;
+        const int hx = 56, hy = MAP_NY[cur_lane] + MAP_NH / 2;
+        const uint32_t next_s = wave_n + 1;
+        const uint32_t prev_s = wave_n + 2;
+
+        /* 先にルート接続線を描画 (現在地 -> 次列, 次列 -> プレビュー列) */
+        for (int nl = 0; nl < 3; ++nl) {
+            if (next_s % 5 == 0 && nl != 1) continue;
+            int ncx = MAP_NX + MAP_NW / 2, ncy = MAP_NY[nl] + MAP_NH / 2;
+            bool reach = game::map_edge_exists(wave_n, cur_lane, nl);
+            if (reach) {
+                draw_line_band(band, by, bh, hx + 20, hy, MAP_NX, ncy, 4, pulse ? C_GOLD : C_AQUA);
+            }
+            if (prev_s <= 50) {
+                for (int pl = 0; pl < 3; ++pl) {
+                    if (prev_s % 5 == 0 && pl != 1) continue;
+                    if (game::map_edge_exists(next_s, nl, pl)) {
+                        int pcy = MAP_NY[pl] + MAP_NH / 2;
+                        draw_line_band(band, by, bh, MAP_NX + MAP_NW, ncy, 356, pcy, 2,
+                                       reach ? RGB(0x3A, 0x58, 0x84) : RGB(0x1E, 0x28, 0x3C));
+                    }
+                }
+            }
+        }
+
+        /* 左列: 現在地マーカー */
+        fill_rect_band(band, by, bh, hx - 34, hy - 26, 68, 52, RGB(0x14, 0x2C, 0x48));
+        draw_rect_frame_band(band, by, bh, hx - 34, hy - 26, 68, 52, 2, C_WHITE);
+        char hbuf[10]; snprintf(hbuf, sizeof(hbuf), "W%u", (unsigned)wave_n);
+        draw_text_shadow_band(band, by, bh, hx - text_w(hbuf, 2) / 2, hy - 18, hbuf, 2, C_AQUA);
+        draw_text_band(band, by, bh, hx - text_w("HERE", 2) / 2, hy + 4, "HERE", 2, C_WHITE);
+
+        /* 中央列: 選択可能な次ステップ (wave_n + 1) の大きなノードカード */
+        for (int nl = 0; nl < 3; ++nl) {
+            if (next_s % 5 == 0 && nl != 1) continue;
+            bool reach = game::map_edge_exists(wave_n, cur_lane, nl);
+            game::NodeKind nk = game::map_node_kind(next_s, nl);
+            uint16_t nc = reach ? node_color(nk) : RGB(0x38, 0x42, 0x58);
+            uint16_t nbg = reach ? RGB(0x16, 0x24, 0x3C) : RGB(0x10, 0x14, 0x20);
+            if (reach && nk == game::NODE_ELITE) nbg = RGB(0x32, 0x12, 0x1E);
+            if (reach && nk == game::NODE_BOSS)  nbg = RGB(0x3A, 0x10, 0x24);
+            if (reach && nk == game::NODE_CAMP)  nbg = RGB(0x10, 0x2E, 0x24);
+            if (reach && nk == game::NODE_TREASURE) nbg = RGB(0x36, 0x28, 0x0E);
+            if (reach && nk == game::NODE_EVENT) nbg = RGB(0x26, 0x16, 0x3C);
+
+            int ny = MAP_NY[nl];
+            fill_rect_band(band, by, bh, MAP_NX, ny, MAP_NW, MAP_NH, nbg);
+            draw_rect_frame_band(band, by, bh, MAP_NX, ny, MAP_NW, MAP_NH, reach ? (pulse ? 3 : 2) : 1, nc);
+            const char* nm = game::map_node_name(nk);
+            const char* sub = node_sub_tag(nk);
+            draw_text_shadow_band(band, by, bh, MAP_NX + (MAP_NW - text_w(nm, 2)) / 2, ny + 12, nm, 2, reach ? C_WHITE : RGB(0x58, 0x64, 0x7A));
+            draw_text_band(band, by, bh, MAP_NX + (MAP_NW - text_w(sub, 2)) / 2, ny + 40, sub, 2, nc);
+        }
+
+        /* 右列: 1歩先プレビュー (wave_n + 2) */
+        if (prev_s <= 50) {
+            for (int pl = 0; pl < 3; ++pl) {
+                if (prev_s % 5 == 0 && pl != 1) continue;
+                game::NodeKind pk = game::map_node_kind(prev_s, pl);
+                uint16_t pc = node_color(pk);
+                int py = MAP_NY[pl] + 10;
+                fill_rect_band(band, by, bh, 356, py, 108, 50, RGB(0x12, 0x18, 0x28));
+                draw_rect_frame_band(band, by, bh, 356, py, 108, 50, 1, pc);
+                const char* pn = game::map_node_name(pk);
+                draw_text_band(band, by, bh, 356 + (108 - text_w(pn, 2)) / 2, py + 18, pn, 2, pc);
+            }
+        }
+
+        const char* hint = game::can_open_box() ? "BOX READY! OR PICK PATH" : "TAP NEXT PATH ->";
+        draw_text_shadow_band(band, by, bh, (FB_W - text_w(hint, 2)) / 2, 318, hint, 2,
+                              game::can_open_box() ? C_GOLD : C_AQUA);
+        return;
+    }
+
+    /* 0d. 行軍アニメーション (DIR_TRAVEL) & 現場ランドマーク描画 */
+    if (dir_mode == DIR_TRAVEL || dir_mode == DIR_CAMP || dir_mode == DIR_TREASURE || dir_mode == DIR_EVENT) {
+        int lsx = (int)(landmark_x - cam_x + 0.5f);
+        if (lsx > -60 && lsx < FB_W + 60) {
+            if (cur_node_kind == game::NODE_CAMP) draw_campfire_band(band, by, bh, lsx, 224);
+            else if (cur_node_kind == game::NODE_TREASURE) draw_chest_band(band, by, bh, lsx, 224, treasure_opened);
+            else if (cur_node_kind == game::NODE_EVENT) draw_altar_band(band, by, bh, lsx, 224);
+        }
+
+        if (dir_mode == DIR_TRAVEL) {
+            int slide = (dir_timer < 8) ? (8 - dir_timer) * 60 : 0;
+            uint16_t tc = node_color(travel_target_kind);
+            fill_rect_band(band, by, bh, slide, 18, FB_W, 56, RGB(0x0C, 0x14, 0x26));
+            fill_rect_band(band, by, bh, slide, 18, FB_W, 2, tc);
+            fill_rect_band(band, by, bh, slide, 72, FB_W, 2, tc);
+            char tb[28];
+            snprintf(tb, sizeof(tb), "-> W%u %s", (unsigned)wave_n, game::map_node_name(travel_target_kind));
+            draw_text_outline_band(band, by, bh, slide + (FB_W - text_w(tb, 3)) / 2, 34, tb, 3, tc);
+            return;
+        }
+
+        /* 現場インタラクション UI (CAMP / TREASURE / EVENT) */
+        if (dir_mode == DIR_CAMP) {
+            fill_rect_band(band, by, bh, 24, 14, 432, 48, RGB(0x0E, 0x24, 0x1E));
+            draw_rect_frame_band(band, by, bh, 24, 14, 432, 48, 2, C_MINT);
+            const char* hdr = "CAMPFIRE REST";
+            draw_text_shadow_band(band, by, bh, (FB_W - text_w(hdr, 3)) / 2, 27, hdr, 3, C_MINT);
+
+            if (node_exit_timer == 0) {
+                fill_rect_band(band, by, bh, 16, 268, 212, 68, RGB(0x14, 0x46, 0x32));
+                draw_rect_frame_band(band, by, bh, 16, 268, 212, 68, 2, C_MINT);
+                draw_text_shadow_band(band, by, bh, 16 + (212 - text_w("REST", 3)) / 2, 278, "REST", 3, C_WHITE);
+                draw_text_band(band, by, bh, 16 + (212 - text_w("HEAL +60%", 2)) / 2, 310, "HEAL +60%", 2, C_MINT);
+
+                fill_rect_band(band, by, bh, 252, 268, 212, 68, RGB(0x46, 0x30, 0x10));
+                draw_rect_frame_band(band, by, bh, 252, 268, 212, 68, 2, C_GOLD);
+                draw_text_shadow_band(band, by, bh, 252 + (212 - text_w("TRAIN", 3)) / 2, 278, "TRAIN", 3, C_WHITE);
+                draw_text_band(band, by, bh, 252 + (212 - text_w("+C & FULL MP", 2)) / 2, 310, "+C & FULL MP", 2, C_GOLD);
+            }
+        } else if (dir_mode == DIR_TREASURE) {
+            fill_rect_band(band, by, bh, 24, 14, 432, 48, RGB(0x2E, 0x20, 0x0A));
+            draw_rect_frame_band(band, by, bh, 24, 14, 432, 48, 2, C_GOLD);
+            const char* hdr = "CRYSTAL CHEST!";
+            draw_text_shadow_band(band, by, bh, (FB_W - text_w(hdr, 3)) / 2, 27, hdr, 3, C_GOLD);
+
+            if (!treasure_opened) {
+                bool pulse = ((dir_timer / 20) & 1) == 0;
+                fill_rect_band(band, by, bh, 64, 270, 352, 64, RGB(0x52, 0x38, 0x10));
+                draw_rect_frame_band(band, by, bh, 64, 270, 352, 64, 2, pulse ? C_GOLD : C_WHITE);
+                const char* btn = "OPEN CHEST!";
+                draw_text_shadow_band(band, by, bh, (FB_W - text_w(btn, 3)) / 2, 291, btn, 3, C_WHITE);
+            }
+        } else if (dir_mode == DIR_EVENT) {
+            static const char* EV_TITLE[3] = {"BLOOD ALTAR", "CRYSTAL WELL", "ANCIENT FORGE"};
+            static const char* EV_A1[3]    = {"OFFER HP", "TOSS 30C", "FORGE"};
+            static const char* EV_A2[3]    = {"-25% -> BOX!", "BIG PRIZE!", "+1 CHARM"};
+            static const char* EV_B1[3]    = {"LEAVE", "DRINK", "SALVAGE"};
+            static const char* EV_B2[3]    = {"HEAL +18%", "HEAL +30%", "+CRYSTALS"};
+            uint8_t eid = cur_event_id % 3;
+
+            fill_rect_band(band, by, bh, 24, 14, 432, 48, RGB(0x22, 0x10, 0x34));
+            draw_rect_frame_band(band, by, bh, 24, 14, 432, 48, 2, C_VIOLET);
+            draw_text_shadow_band(band, by, bh, (FB_W - text_w(EV_TITLE[eid], 3)) / 2, 27, EV_TITLE[eid], 3, C_VIOLET);
+
+            if (node_exit_timer == 0) {
+                fill_rect_band(band, by, bh, 16, 268, 212, 68, RGB(0x46, 0x16, 0x32));
+                draw_rect_frame_band(band, by, bh, 16, 268, 212, 68, 2, C_GOLD);
+                draw_text_shadow_band(band, by, bh, 16 + (212 - text_w(EV_A1[eid], 2)) / 2, 278, EV_A1[eid], 2, C_WHITE);
+                draw_text_band(band, by, bh, 16 + (212 - text_w(EV_A2[eid], 2)) / 2, 306, EV_A2[eid], 2, C_GOLD);
+
+                fill_rect_band(band, by, bh, 252, 268, 212, 68, RGB(0x16, 0x2E, 0x48));
+                draw_rect_frame_band(band, by, bh, 252, 268, 212, 68, 2, C_AQUA);
+                draw_text_shadow_band(band, by, bh, 252 + (212 - text_w(EV_B1[eid], 2)) / 2, 278, EV_B1[eid], 2, C_WHITE);
+                draw_text_band(band, by, bh, 252 + (212 - text_w(EV_B2[eid], 2)) / 2, 306, EV_B2[eid], 2, C_AQUA);
+            }
+        }
+        /* フラッシュメッセージ表示だけ下の共通処理へ落とす */
+        if (flash_frames > 0 && flash_msg_buf[0] && by < 120 && by + bh > 66) {
+            draw_text_outline_band(band, by, bh, (FB_W - text_w(flash_msg_buf, 2)) / 2, 78, flash_msg_buf, 2, C_GOLD);
+        }
+        return;
+    }
+
     /* 1. ボス HP バー + 50% / 30% / 10% しきい値マーク (UX ガイドライン: 2x = 14px) */
     if (wave_active && dir_mode == DIR_BATTLE) {
         const Actor* boss = nullptr;
@@ -3412,8 +4099,13 @@ void render(uint16_t* fb, int buf)
         if (dir_timer >= 65 && dir_timer < 140) cur_tint = 1;
         else if (dir_timer >= 140 && dir_timer < 215) cur_tint = 2;
     }
+    else if (dir_mode == DIR_TRAVEL && (travel_target_kind == game::NODE_ELITE || travel_target_kind == game::NODE_BOSS)) cur_tint = 1;
+    else if (dir_mode == DIR_EVENT || (dir_mode == DIR_TRAVEL && travel_target_kind == game::NODE_EVENT)) cur_tint = 2;
+    else if (dir_mode == DIR_BATTLE && battle_is_elite) cur_tint = 1;
     else if (dir_mode == DIR_BOSS_INTRO || dir_mode == DIR_GAME_OVER) cur_tint = 1;
     else if (cutin_draw > 0 || dir_mode == DIR_ENDING) cur_tint = 2;
+    else if (wave_n >= 21 && wave_n <= 30) cur_tint = 1;
+    else if (wave_n >= 31 && wave_n <= 40) cur_tint = 2;
     bool bg_changed = (icam != prev_icam[b] || ox != prev_ox[b] || oy != prev_oy[b] || cur_tint != prev_tint[b]);
 
     PreparedActor p_actors[ALLY_N + ENEMY_N];
@@ -3589,7 +4281,9 @@ void render(uint16_t* fb, int buf)
             (dir_mode == DIR_BOSS_INTRO && (by < 28 || by + bh > 324 || (by < 232 && by + bh > 100))) ||
             (dir_mode == DIR_WAVE_CLEAR && by < 130 && by + bh > 56) ||
             (dir_mode == DIR_BOSS_VICTORY && ((by < 160 && by + bh > 80) || (by < 180 && by + bh > 64))) ||
-            (dir_mode == DIR_TITLE || dir_mode == DIR_OPENING || dir_mode == DIR_GAME_OVER || dir_mode == DIR_ENDING) ||
+            (dir_mode == DIR_TITLE || dir_mode == DIR_OPENING || dir_mode == DIR_MAP || dir_mode == DIR_TRAVEL ||
+             dir_mode == DIR_CAMP || dir_mode == DIR_TREASURE || dir_mode == DIR_EVENT ||
+             dir_mode == DIR_GAME_OVER || dir_mode == DIR_ENDING) ||
             (flash_frames > 0 && dir_mode != DIR_TITLE && dir_mode != DIR_OPENING && dir_mode != DIR_GAME_OVER && dir_mode != DIR_ENDING && by < 92 && by + bh > 46)) {
             cur_mask = 0x7FFFu;
         }
@@ -3998,7 +4692,41 @@ void render_hud(uint16_t* fb, int buf)
     hs.valid = true;
 }
 
-/* ---------------- ルートボックス 3択ドラフト / 入替 / ステータス画面 (最小 2x = 14px) ---------------- */
+static inline uint16_t blend50_rgb565(uint16_t dst, uint16_t src)
+{
+    return (uint16_t)(((dst & 0xF7DEu) >> 1) + ((src & 0xF7DEu) >> 1));
+}
+
+static inline uint16_t blend75_rgb565(uint16_t dst, uint16_t src)
+{
+    /* 25% dst + 75% src (背景をうっすら透過しつつ文字可読性を確保) */
+    uint16_t d25 = (uint16_t)((dst & 0xE79Cu) >> 2);
+    uint16_t s50 = (uint16_t)((src & 0xF7DEu) >> 1);
+    uint16_t s25 = (uint16_t)((src & 0xE79Cu) >> 2);
+    return (uint16_t)(d25 + s50 + s25);
+}
+
+static void blend_rect_band(uint16_t* band, int by, int bh, int x, int y, int w, int h, uint16_t col, bool strong = true)
+{
+    int x0 = x < 0 ? 0 : x;
+    int y0 = y < by ? by : y;
+    int x1 = x + w > FB_W ? FB_W : x + w;
+    int y1 = y + h > by + bh ? by + bh : y + h;
+    if (x0 >= x1 || y0 >= y1) return;
+    if (strong) {
+        for (int yy = y0; yy < y1; ++yy) {
+            uint16_t* row = band + (yy - by) * FB_W;
+            for (int xx = x0; xx < x1; ++xx) row[xx] = blend75_rgb565(row[xx], col);
+        }
+    } else {
+        for (int yy = y0; yy < y1; ++yy) {
+            uint16_t* row = band + (yy - by) * FB_W;
+            for (int xx = x0; xx < x1; ++xx) row[xx] = blend50_rgb565(row[xx], col);
+        }
+    }
+}
+
+/* ---------------- ルートボックス 3択ドラフト / 入替 / ステータス画面 (半透明透過 + 最小 2x) ---------------- */
 static void draw_draft_card_band(uint16_t* band, int by, int bh, int c_idx)
 {
     int x = CARD_X[c_idx], y = CARD_Y;
@@ -4006,14 +4734,14 @@ static void draw_draft_card_band(uint16_t* band, int by, int bh, int c_idx)
     uint16_t rc = rarity_color(dc.rarity);
     uint16_t rbg = rarity_bg(dc.rarity);
 
-    fill_rect_band(band, by, bh, x, y, CARD_W, CARD_H, RGB(0x16, 0x1C, 0x2C));
+    blend_rect_band(band, by, bh, x, y, CARD_W, CARD_H, RGB(0x10, 0x16, 0x26), true);
     draw_rect_frame_band(band, by, bh, x, y, CARD_W, CARD_H, 2, rc);
-    fill_rect_band(band, by, bh, x + 2, y + 2, CARD_W - 4, 24, rbg);
+    blend_rect_band(band, by, bh, x + 2, y + 2, CARD_W - 4, 24, rbg, true);
     const char* rt = game::rarity_tag(dc.rarity);
     draw_text_shadow_band(band, by, bh, x + (CARD_W - text_w(rt, 2)) / 2, y + 7, rt, 2, rc);
 
-    /* プレビュー枠 (h = 84px) */
-    fill_rect_band(band, by, bh, x + 8, y + 30, CARD_W - 16, 84, RGB(0x0E, 0x14, 0x22));
+    /* プレビュー枠 (h = 84px, 背景透過あり) */
+    blend_rect_band(band, by, bh, x + 8, y + 30, CARD_W - 16, 84, RGB(0x08, 0x0E, 0x1C), false);
     if (dc.is_talent) {
         const auto& td = game::TALENTS[dc.id];
         uint32_t words = 0; int sz = 0;
@@ -4081,25 +4809,30 @@ static void draw_draft_card_band(uint16_t* band, int by, int bh, int c_idx)
 void render_panel(uint16_t* fb, bool open, bool info_peek, int)
 {
     if (!open || !band_buf) return;
-    const uint16_t C_PAN_BG = RGB(0x12, 0x14, 0x22);
+    const uint16_t C_PAN_TINT = RGB(0x0A, 0x0E, 0x1C);
     int swap_tid = game::st.swap_talent;
     bool show_swap = game::st.draft_open && (swap_tid >= 0);
     bool show_draft = game::st.draft_open && !info_peek && !show_swap;
 
     for (int by = PANEL_Y; by < PANEL_Y + PANEL_H; by += 32) {
         int bh = (by + 32 > PANEL_Y + PANEL_H) ? (PANEL_Y + PANEL_H - by) : 32;
-        fill_span32(band_buf, bh * FB_W, C_PAN_BG);
-        fill_rect_band(band_buf, by, bh, PANEL_X, PANEL_Y, PANEL_W, 2, RGB(0x2A, 0x2C, 0x52));
+        /* 背景のゲーム画面を読み込み、50% ダーク半透明ティントで透過合成 */
+        const uint16_t* src = fb + by * FB_W;
+        int n_px = bh * FB_W;
+        for (int i = 0; i < n_px; ++i) {
+            band_buf[i] = blend50_rgb565(src[i], C_PAN_TINT);
+        }
+        fill_rect_band(band_buf, by, bh, PANEL_X, PANEL_Y, PANEL_W, 2, C_AQUA);
 
         /* ヘッダ [X] ボタン (60 x 44 px) */
-        fill_rect_band(band_buf, by, bh, CLOSE_X, CLOSE_Y, CLOSE_W, CLOSE_H, RGB(0x68, 0x28, 0x28));
+        blend_rect_band(band_buf, by, bh, CLOSE_X, CLOSE_Y, CLOSE_W, CLOSE_H, RGB(0x78, 0x24, 0x28), true);
         draw_rect_frame_band(band_buf, by, bh, CLOSE_X, CLOSE_Y, CLOSE_W, CLOSE_H, 2, C_RED);
         draw_text_shadow_band(band_buf, by, bh, CLOSE_X + (CLOSE_W - text_w("X", 3)) / 2, CLOSE_Y + 11, "X", 3, C_WHITE);
 
         if (show_swap) {
-            draw_text_shadow_band(band_buf, by, bh, 14, PANEL_Y + 12, "SWAP HERO", 3, C_GOLD);
+            draw_text_outline_band(band_buf, by, bh, 14, PANEL_Y + 12, "SWAP HERO", 3, C_GOLD);
             const auto& nt = game::TALENTS[swap_tid % game::TALENT_N];
-            fill_rect_band(band_buf, by, bh, 12, PANEL_Y + 52, 456, 70, RGB(0x1A, 0x24, 0x3A));
+            blend_rect_band(band_buf, by, bh, 12, PANEL_Y + 52, 456, 70, RGB(0x14, 0x1E, 0x34), true);
             draw_rect_frame_band(band_buf, by, bh, 12, PANEL_Y + 52, 456, 70, 2, rarity_color(nt.rarity));
             char ib[40];
             snprintf(ib, sizeof(ib), "NEW: %.10s HP%d A%d", nt.name, (int)nt.hp, (int)(nt.dmg + 0.5f));
@@ -4108,7 +4841,7 @@ void render_panel(uint16_t* fb, bool open, bool info_peek, int)
 
             for (int i = 0; i < ALLY_N; ++i) {
                 int sx = SWAP_X[i], sy = SWAP_Y;
-                fill_rect_band(band_buf, by, bh, sx, sy, SWAP_W, SWAP_H, RGB(0x1C, 0x1C, 0x2E));
+                blend_rect_band(band_buf, by, bh, sx, sy, SWAP_W, SWAP_H, RGB(0x18, 0x18, 0x2A), true);
                 draw_rect_frame_band(band_buf, by, bh, sx, sy, SWAP_W, SWAP_H, 2, C_RED);
                 if (game::st.party[i].active) {
                     const auto& ot = game::TALENTS[game::st.party[i].talent_id];
@@ -4126,28 +4859,33 @@ void render_panel(uint16_t* fb, bool open, bool info_peek, int)
                 }
             }
         } else if (show_draft) {
-            draw_text_shadow_band(band_buf, by, bh, 14, PANEL_Y + 12, "PICK 1", 3, C_GOLD);
-            fill_rect_band(band_buf, by, bh, PEEKBTN_X, PEEKBTN_Y, PEEKBTN_W, PEEKBTN_H, RGB(0x20, 0x38, 0x54));
+            draw_text_outline_band(band_buf, by, bh, 14, PANEL_Y + 12, "PICK 1", 3, C_GOLD);
+            blend_rect_band(band_buf, by, bh, PEEKBTN_X, PEEKBTN_Y, PEEKBTN_W, PEEKBTN_H, RGB(0x1C, 0x36, 0x54), true);
             draw_rect_frame_band(band_buf, by, bh, PEEKBTN_X, PEEKBTN_Y, PEEKBTN_W, PEEKBTN_H, 2, C_AQUA);
             draw_text_shadow_band(band_buf, by, bh, PEEKBTN_X + (PEEKBTN_W - text_w("STATUS", 2)) / 2, PEEKBTN_Y + 15, "STATUS", 2, C_WHITE);
             for (int c = 0; c < 3; ++c) draw_draft_card_band(band_buf, by, bh, c);
         } else {
-            draw_text_shadow_band(band_buf, by, bh, 14, PANEL_Y + 12, "STATUS", 3, C_AQUA);
+            draw_text_outline_band(band_buf, by, bh, 14, PANEL_Y + 12, "PAUSED", 3, C_AQUA);
+            /* TITLE ボタン (セーブしてタイトル画面へ戻る) */
+            blend_rect_band(band_buf, by, bh, TITLEBTN_X, TITLEBTN_Y, TITLEBTN_W, TITLEBTN_H, RGB(0x46, 0x20, 0x38), true);
+            draw_rect_frame_band(band_buf, by, bh, TITLEBTN_X, TITLEBTN_Y, TITLEBTN_W, TITLEBTN_H, 2, RGB(0xD0, 0x78, 0xA8));
+            draw_text_shadow_band(band_buf, by, bh, TITLEBTN_X + (TITLEBTN_W - text_w("TITLE", 2)) / 2, TITLEBTN_Y + 15, "TITLE", 2, C_WHITE);
+
             if (game::st.draft_open) {
-                fill_rect_band(band_buf, by, bh, PEEKBTN_X, PEEKBTN_Y, PEEKBTN_W, PEEKBTN_H, RGB(0x64, 0x3C, 0x10));
+                blend_rect_band(band_buf, by, bh, PEEKBTN_X, PEEKBTN_Y, PEEKBTN_W, PEEKBTN_H, RGB(0x64, 0x3C, 0x10), true);
                 draw_rect_frame_band(band_buf, by, bh, PEEKBTN_X, PEEKBTN_Y, PEEKBTN_W, PEEKBTN_H, 2, C_GOLD);
                 draw_text_shadow_band(band_buf, by, bh, PEEKBTN_X + (PEEKBTN_W - text_w("DRAFT", 2)) / 2, PEEKBTN_Y + 15, "DRAFT", 2, C_WHITE);
             } else if (game::can_open_box()) {
-                fill_rect_band(band_buf, by, bh, PEEKBTN_X, PEEKBTN_Y, PEEKBTN_W, PEEKBTN_H, RGB(0x64, 0x3C, 0x10));
+                blend_rect_band(band_buf, by, bh, PEEKBTN_X, PEEKBTN_Y, PEEKBTN_W, PEEKBTN_H, RGB(0x64, 0x3C, 0x10), true);
                 draw_rect_frame_band(band_buf, by, bh, PEEKBTN_X, PEEKBTN_Y, PEEKBTN_W, PEEKBTN_H, 2, C_GOLD);
                 draw_text_shadow_band(band_buf, by, bh, PEEKBTN_X + (PEEKBTN_W - text_w("OPEN!", 2)) / 2, PEEKBTN_Y + 15, "OPEN!", 2, C_GOLD);
             }
 
-            /* 3人スロットステータス (すべて 2x = 14px) */
+            /* 3人スロットステータス (半透明カード + 2x = 14px) */
             for (int i = 0; i < ALLY_N; ++i) {
                 int cx = 12 + i * 155, cy = PANEL_Y + 52;
-                fill_rect_band(band_buf, by, bh, cx, cy, 146, 108, RGB(0x18, 0x1E, 0x30));
-                draw_rect_frame_band(band_buf, by, bh, cx, cy, 146, 108, 1, RGB(0x38, 0x48, 0x6A));
+                blend_rect_band(band_buf, by, bh, cx, cy, 146, 108, RGB(0x12, 0x18, 0x2A), true);
+                draw_rect_frame_band(band_buf, by, bh, cx, cy, 146, 108, 1, RGB(0x48, 0x60, 0x8A));
                 if (game::st.party[i].active) {
                     const auto& td = game::TALENTS[game::st.party[i].talent_id];
                     char ln[16];
@@ -4160,25 +4898,26 @@ void render_panel(uint16_t* fb, bool open, bool info_peek, int)
                     snprintf(ln, sizeof(ln), "MP %d%%", (int)allies[i].rage);
                     draw_text_band(band_buf, by, bh, cx + 8, cy + 84, ln, 2, C_AQUA);
                 } else {
-                    draw_text_band(band_buf, by, bh, cx + (146 - text_w("EMPTY", 2)) / 2, cy + 46, "EMPTY", 2, RGB(0x68, 0x74, 0x8C));
+                    draw_text_band(band_buf, by, bh, cx + (146 - text_w("EMPTY", 2)) / 2, cy + 46, "EMPTY", 2, RGB(0x88, 0x96, 0xB0));
                 }
             }
 
-            /* ビルド合算バフ (2x 大きく見やすく) */
+            /* ビルド合算バフ (半透明プレート上 2x) */
+            blend_rect_band(band_buf, by, bh, 12, PANEL_Y + 166, 456, 52, RGB(0x0E, 0x14, 0x24), true);
             char b1[32], b2[32];
             snprintf(b1, sizeof(b1), "ATK %d%%   HP %d%%", game::st.mods.dmg_pct, game::st.mods.hp_pct);
             snprintf(b2, sizeof(b2), "CRIT %d%%  VAMP %.1f", game::st.mods.crit_pct, game::st.mods.vamp_x10 / 10.0f);
-            draw_text_band(band_buf, by, bh, 16, PANEL_Y + 172, b1, 2, C_GOLD);
-            draw_text_band(band_buf, by, bh, 16, PANEL_Y + 196, b2, 2, C_MINT);
+            draw_text_shadow_band(band_buf, by, bh, 20, PANEL_Y + 172, b1, 2, C_GOLD);
+            draw_text_shadow_band(band_buf, by, bh, 20, PANEL_Y + 196, b2, 2, C_MINT);
 
-            /* 所持チャーム上位 4 件 (2列 x 2行, 2x バッジ) */
+            /* 所持チャーム上位 4 件 (2列 x 2行, 半透明 2x バッジ) */
             int shown = 0;
             for (int cid = 0; cid < game::CHARM_N && shown < 4; ++cid) {
                 uint8_t lv = game::st.charm_lv[cid];
                 if (lv == 0) continue;
                 int col = shown % 2, row = shown / 2;
-                int bx = 12 + col * 232, b_y = PANEL_Y + 224 + row * 38;
-                fill_rect_band(band_buf, by, bh, bx, b_y, 224, 32, RGB(0x1A, 0x24, 0x38));
+                int bx = 12 + col * 232, b_y = PANEL_Y + 226 + row * 38;
+                blend_rect_band(band_buf, by, bh, bx, b_y, 224, 32, RGB(0x12, 0x1C, 0x30), true);
                 draw_rect_frame_band(band_buf, by, bh, bx, b_y, 224, 32, 1, rarity_color(game::CHARMS[cid].rarity));
                 char cb[20];
                 snprintf(cb, sizeof(cb), "%.12s LV%u", game::CHARMS[cid].name, (unsigned)lv);
@@ -4186,18 +4925,31 @@ void render_panel(uint16_t* fb, bool open, bool info_peek, int)
                 shown++;
             }
             if (shown == 0) {
-                draw_text_band(band_buf, by, bh, 16, PANEL_Y + 242, "NO CHARMS YET", 2, RGB(0x98, 0xA8, 0xC0));
+                draw_text_shadow_band(band_buf, by, bh, 20, PANEL_Y + 242, "NO CHARMS YET", 2, RGB(0xA8, 0xB8, 0xD0));
             }
 
             char ftr[36];
             snprintf(ftr, sizeof(ftr), "RUN#%u BEST W%u CDX %d/64",
                      (unsigned)game::st.run_number, (unsigned)game::st.best_wave,
                      game::discovered_talent_count());
-            draw_text_band(band_buf, by, bh, (FB_W - text_w(ftr, 2)) / 2, PANEL_Y + 322, ftr, 2, C_AQUA);
+            draw_text_outline_band(band_buf, by, bh, 14, PANEL_Y + 318, ftr, 2, C_AQUA);
+
+            /* SFX ON/OFF トグルボタン (右下 126 x 44 px) */
+            bool sfx_on = !sfx::is_muted();
+            blend_rect_band(band_buf, by, bh, SFXBTN_X, SFXBTN_Y, SFXBTN_W, SFXBTN_H,
+                            sfx_on ? RGB(0x1C, 0x4C, 0x42) : RGB(0x3A, 0x24, 0x2C), true);
+            draw_rect_frame_band(band_buf, by, bh, SFXBTN_X, SFXBTN_Y, SFXBTN_W, SFXBTN_H, 2,
+                                 sfx_on ? C_MINT : RGB(0xB0, 0x60, 0x70));
+            const char* slbl = sfx_on ? "SFX:ON" : "SFX:OFF";
+            draw_text_shadow_band(band_buf, by, bh, SFXBTN_X + (SFXBTN_W - text_w(slbl, 2)) / 2,
+                                  SFXBTN_Y + 15, slbl, 2, sfx_on ? C_WHITE : RGB(0xD0, 0xA0, 0xA8));
         }
 
         memcpy(fb + by * FB_W, band_buf, (size_t)(bh * FB_W * 2));
     }
+
+    /* 次フレームの透過合成で二重暗転しないよう背景バンドを確実に再描画させる */
+    invalidate_all_bands();
 
     /* ドラフトプレビューで一時流用した敵スロットキャッシュを無効化 */
     if (show_draft) {

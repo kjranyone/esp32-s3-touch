@@ -13,6 +13,15 @@
 
 namespace game {
 
+enum NodeKind : uint8_t {
+    NODE_BATTLE   = 0,
+    NODE_ELITE    = 1,
+    NODE_CAMP     = 2,
+    NODE_TREASURE = 3,
+    NODE_EVENT    = 4,
+    NODE_BOSS     = 5,
+};
+
 struct PartySlot {
     bool active;
     uint8_t talent_id;
@@ -62,6 +71,7 @@ struct State {
     uint16_t boxes_opened;
     uint8_t free_boxes;
     uint32_t wave_reached;
+    uint8_t map_lane;         /* 現在レーン 0..2 (マップ分岐用) */
     PartySlot party[PARTY_MAX];
     uint8_t charm_lv[CHARM_N];
     bool draft_open;
@@ -122,5 +132,13 @@ int pet_remaining_s();
 double pet_mult();
 
 const char* fmt(double v, char* buf, size_t len);
+
+/* STS / Peglin 風ルートマップ決定論的生成 */
+NodeKind map_node_kind(uint32_t step, int lane);
+bool     map_edge_exists(uint32_t from_step, int from_lane, int to_lane);
+const char* map_node_name(NodeKind k);
+const char* chapter_name(uint32_t step);
+void     grant_free_box(uint8_t n = 1);
+int      grant_random_charm();
 
 } // namespace game

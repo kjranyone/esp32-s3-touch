@@ -12,6 +12,7 @@ em++ -O3 -std=gnu++17 \
   -I "$ROOT_DIR/src" \
   "$ROOT_DIR/web/web_main.cpp" \
   "$ROOT_DIR/src/beat.cpp" \
+  "$ROOT_DIR/src/sfx.cpp" \
   "$ROOT_DIR/src/garden_game.cpp" \
   "$ROOT_DIR/src/game_params.cpp" \
   -o "$OUT_DIR/crystal_garden.js" \
@@ -20,8 +21,8 @@ em++ -O3 -std=gnu++17 \
   -s ENVIRONMENT=web \
   -s INITIAL_MEMORY=67108864 \
   -s ALLOW_MEMORY_GROWTH=1 \
-  -s EXPORTED_FUNCTIONS="['_emu_init','_emu_step','_emu_render','_emu_get_rgba_ptr','_emu_pointer_down','_emu_pointer_move','_emu_pointer_up','_emu_trigger_pet','_emu_send_command','_emu_save','_emu_get_wave','_emu_get_run','_emu_get_party_count']" \
-  -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','HEAPU8']"
+  -s EXPORTED_FUNCTIONS="['_emu_init','_emu_step','_emu_render','_emu_get_rgba_ptr','_emu_pointer_down','_emu_pointer_move','_emu_pointer_up','_emu_trigger_pet','_emu_send_command','_emu_save','_emu_get_wave','_emu_get_run','_emu_get_party_count','_emu_audio_set_rate','_emu_audio_render','_emu_sfx_set_muted','_emu_sfx_is_muted','_emu_sfx_play']" \
+  -s EXPORTED_RUNTIME_METHODS="['ccall','cwrap','UTF8ToString','HEAPU8','HEAPF32']"
 
 cp "$ROOT_DIR/web/index.html" "$OUT_DIR/index.html"
 touch "$OUT_DIR/.nojekyll"

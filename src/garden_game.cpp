@@ -168,6 +168,7 @@ void start_new_run()
     st.boxes_opened = 0;
     st.free_boxes = 0;
     st.wave_reached = 1;
+    st.map_lane = 1;
     memset(st.party, 0, sizeof(st.party));
     st.party[0] = {true, 0, 1}; /* #00 LUMI ★1 (弱い初期スタート) */
     memset(st.charm_lv, 0, sizeof(st.charm_lv));
@@ -208,6 +209,7 @@ void init()
         st.boxes_opened = p.boxes_opened;
         st.free_boxes = p.free_boxes;
         st.wave_reached = (p.wave_reached >= 1 && p.wave_reached <= 50) ? p.wave_reached : 1;
+        st.map_lane = 1;
         memcpy(st.party, p.party, sizeof(st.party));
         for (int i = 0; i < PARTY_MAX; ++i) {
             if (st.party[i].talent_id >= TALENT_N) st.party[i].active = false;
@@ -571,6 +573,112 @@ const char* fmt(double v, char* buf, size_t len)
     if (s == 0) snprintf(buf, len, "%d", (int)(x + 0.5));
     else snprintf(buf, len, "%.1f%s", x, sfx[s]);
     return buf;
+}
+
+/* ---------- STS / Peglin 式ルートマップ生成 ---------- */
+static uint32_t map_hash(uint32_t step, uint32_t salt)
+{
+    uint32_t h = (st.run_number * 2654435761u) ^ (step * 2246822519u) ^ (salt * 3266489917u) ^ 0x51A7E123u;
+    h ^= h >> 16;
+    h *= 0x7FEB352Du;
+    h ^= h >> 15;
+    return h;
+}
+
+NodeKind map_node_kind(uint32_t step, int lane)
+{
+    if (lane < 0) lane = 0;
+    if (lane > 2) lane = 2;
+    if (step <= 1) return NODE_BATTLE;
+    if (step >= 50 || (step % 5) == 0) return NODE_BOSS;
+
+    uint32_t mod = step % 5;
+    uint32_t perm = map_hash(step, 1) % 6;
+    /* 3レーンに異なる種類を割り当てるための6通り置換テーブル */
+    static const uint8_t PERM[6][3] = {
+        {0, 1, 2}, {0, 2, 1}, {1, 0, 2},
+        {1, 2, 0}, {2, 0, 1}, {2, 1, 0},
+    };
+    uint8_t slot = PERM[perm][lane];
+
+    if (mod == 4) {
+        /* ボス直前: 必ず CAMP / ELITE / (TREASURE or EVENT) の究極の3択 */
+        if (slot == 0) return NODE_CAMP;
+        if (slot == 1) return NODE_ELITE;
+        return (map_hash(step, 7) & 1) ? NODE_TREASURE : NODE_EVENT;
+    }
+    if (mod == 3) {
+        /* 中盤分岐: ELITE / EVENT / (TREASURE or BATTLE) */
+        if (slot == 0) return NODE_ELITE;
+        if (slot == 1) return NODE_EVENT;
+        return (map_hash(step, 9) & 1) ? NODE_TREASURE : NODE_BATTLE;
+    }
+    if (mod == 2) {
+        /* 序盤分岐: BATTLE / EVENT / (CAMP or TREASURE) */
+        if (slot == 0) return NODE_BATTLE;
+        if (slot == 1) return NODE_EVENT;
+        return (map_hash(step, 11) % 3 == 0) ? NODE_TREASURE : NODE_CAMP;
+    }
+    /* mod == 1 (ボス突破直後の新エリア入口): BATTLE / BATTLE / EVENT */
+    if (slot == 2) return NODE_EVENT;
+    return NODE_BATTLE;
+}
+
+bool map_edge_exists(uint32_t from_step, int from_lane, int to_lane)
+{
+    if (from_lane < 0 || from_lane > 2 || to_lane < 0 || to_lane > 2) return false;
+    uint32_t next_step = from_step + 1;
+    if (next_step > 50) return false;
+    if (next_step % 5 == 0) return to_lane == 1;          /* ボスへ収束 */
+    if (from_step <= 1 || from_step % 5 == 0) return true; /* ボス直後・Wave1後は全3レーンへ分岐 */
+    /* 通常ステップ: 同レーンまたは隣接レーンへ進行可能 */
+    int d = to_lane - from_lane;
+    return (d >= -1 && d <= 1);
+}
+
+const char* map_node_name(NodeKind k)
+{
+    switch (k) {
+    case NODE_BATTLE:   return "BATTLE";
+    case NODE_ELITE:    return "ELITE";
+    case NODE_CAMP:     return "CAMP";
+    case NODE_TREASURE: return "CHEST";
+    case NODE_EVENT:    return "EVENT";
+    case NODE_BOSS:     return "BOSS";
+    default:            return "BATTLE";
+    }
+}
+
+const char* chapter_name(uint32_t step)
+{
+    if (step <= 10) return "CH1 GARDEN";
+    if (step <= 20) return "CH2 TWILIGHT";
+    if (step <= 30) return "CH3 CRIMSON";
+    if (step <= 40) return "CH4 ASTRAL";
+    return "CH5 THRONE";
+}
+
+void grant_free_box(uint8_t n)
+{
+    uint16_t v = (uint16_t)st.free_boxes + n;
+    st.free_boxes = (v > 9) ? 9 : (uint8_t)v;
+    save();
+}
+
+int grant_random_charm()
+{
+    int pool[CHARM_N], n = 0;
+    for (int i = 0; i < CHARM_N; ++i) {
+        if ((st.unlocked_charms & (1ULL << i)) && st.charm_lv[i] < CHARMS[i].max_lv) {
+            pool[n++] = i;
+        }
+    }
+    if (n == 0) return -1;
+    int cid = pool[rl_rand() % (uint32_t)n];
+    st.charm_lv[cid]++;
+    recalc_mods();
+    save();
+    return cid;
 }
 
 } // namespace game

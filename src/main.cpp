@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include <esp_display_panel.hpp>
 #include "beat.h"
+#include "sfx.h"
 #include "garden_game.h"
 #include "game_params.h"
 #include <esp_heap_caps.h>
@@ -83,36 +84,43 @@ static volatile bool     pend_hardreset = false;
 static volatile bool     pend_reset = false;
 static volatile bool     pend_title = false;
 static volatile bool     pend_op = false;
+static volatile bool     pend_map = false;
+static volatile bool     pend_status = false;
 static volatile bool     shot_req = false;
 static volatile bool     pause_render = false;
 
 /* ================= タッチ処理 ================= */
 static void handle_tap(int x, int y)
 {
-    if (beat::is_modal_director()) {
-        panel_open = false;
-        info_peek = false;
-        beat::notify_tap(x, y);
-        return;
-    }
-
-    /* BOX ボタン (右下) */
-    if (x >= beat::BOXBTN_X && x < beat::BOXBTN_X + beat::BOXBTN_W &&
+    /* BOX ボタン (右下): 戦闘中 & マップ画面でいつでも安全に開閉可 */
+    if (beat::allow_box_button() &&
+        x >= beat::BOXBTN_X && x < beat::BOXBTN_X + beat::BOXBTN_W &&
         y >= beat::BOXBTN_Y && y < beat::BOXBTN_Y + beat::BOXBTN_H) {
         if (!panel_open) {
             panel_open = true;
             info_peek = false;
+            bool opened_box = false;
             if (!game::st.draft_open && game::can_open_box()) {
                 if (game::open_lootbox(false)) {
                     beat::flash_message("LOOTBOX OPEN!", 36);
+                    opened_box = true;
                 }
             }
+            sfx::play((opened_box || game::st.draft_open) ? sfx::SFX_BOX_OPEN : sfx::SFX_PAUSE);
         } else {
             panel_open = false;
             info_peek = false;
             game::st.swap_talent = -1;
+            sfx::play(sfx::SFX_CANCEL);
         }
         beat::request_full_restore();
+        return;
+    }
+
+    if (!panel_open && beat::is_modal_director()) {
+        panel_open = false;
+        info_peek = false;
+        beat::notify_tap(x, y);
         return;
     }
 
@@ -120,6 +128,7 @@ static void handle_tap(int x, int y)
         /* [X] 閉じる (入れ替え選択中はドラフトへ戻る) */
         if (x >= beat::CLOSE_X && x < beat::CLOSE_X + beat::CLOSE_W &&
             y >= beat::CLOSE_Y && y < beat::CLOSE_Y + beat::CLOSE_H) {
+            sfx::play(sfx::SFX_CANCEL);
             if (game::st.swap_talent >= 0) {
                 game::st.swap_talent = -1;
             } else {
@@ -130,15 +139,41 @@ static void handle_tap(int x, int y)
             return;
         }
 
+        /* PAUSED / STATUS 画面の [TITLE] ボタン (セーブしてタイトル画面へ戻る) */
+        bool on_status_view = (!game::st.draft_open || info_peek) && (game::st.swap_talent < 0);
+        if (on_status_view &&
+            x >= beat::TITLEBTN_X && x < beat::TITLEBTN_X + beat::TITLEBTN_W &&
+            y >= beat::TITLEBTN_Y && y < beat::TITLEBTN_Y + beat::TITLEBTN_H) {
+            sfx::play(sfx::SFX_CONFIRM);
+            game::save();
+            panel_open = false;
+            info_peek = false;
+            game::st.swap_talent = -1;
+            beat::enter_title();
+            return;
+        }
+
+        /* PAUSED / STATUS 画面の [SFX:ON/OFF] トグルボタン */
+        if (on_status_view &&
+            x >= beat::SFXBTN_X && x < beat::SFXBTN_X + beat::SFXBTN_W &&
+            y >= beat::SFXBTN_Y && y < beat::SFXBTN_Y + beat::SFXBTN_H) {
+            bool next_mute = !sfx::is_muted();
+            sfx::set_muted(next_mute);
+            if (!next_mute) sfx::play(sfx::SFX_CONFIRM);
+            return;
+        }
+
         /* ヘッダ [STATUS / TO DRAFT / OPEN BOX] */
         if (game::st.swap_talent < 0 &&
             x >= beat::PEEKBTN_X && x < beat::PEEKBTN_X + beat::PEEKBTN_W &&
             y >= beat::PEEKBTN_Y && y < beat::PEEKBTN_Y + beat::PEEKBTN_H) {
             if (game::st.draft_open) {
                 info_peek = !info_peek;
+                sfx::play(sfx::SFX_TAP);
             } else if (game::can_open_box()) {
                 if (game::open_lootbox(false)) {
                     info_peek = false;
+                    sfx::play(sfx::SFX_BOX_OPEN);
                 }
             }
             return;
@@ -241,11 +276,35 @@ static void handle_command(char* line)
     if (strcmp(line, "?") == 0 || strcmp(line, "help") == 0) {
         gp::print_all();
         Serial.println("[cmd] give <v> | wave <1..50> | boss | bphase <50|30|10> | box | pick <0..2> [slot] | scout <id> | charm <id>");
-        Serial.println("[cmd] ult | win | heal | gameover | ending | title | op | unlockall | hardreset | reset | save | dump | shot");
+        Serial.println("[cmd] ult | win | heal | gameover | ending | title | op | map | unlockall | hardreset | reset | save | dump | shot");
         return;
     }
     if (strcmp(line, "title") == 0)     { pend_title = true; return; }
     if (strcmp(line, "op") == 0)        { pend_op = true; return; }
+    if (strcmp(line, "map") == 0)       { pend_map = true; return; }
+    if (strcmp(line, "status") == 0)    { pend_status = true; return; }
+    if (strncmp(line, "sfx", 3) == 0 && (line[3] == 0 || line[3] == ' ')) {
+        const char* arg = line[3] ? (line + 4) : "";
+        if (strcmp(arg, "off") == 0 || strcmp(arg, "0") == 0) {
+            sfx::set_muted(true);
+            Serial.println("[sfx] muted");
+        } else if (strcmp(arg, "on") == 0 || strcmp(arg, "1") == 0) {
+            sfx::set_muted(false);
+            sfx::play(sfx::SFX_CONFIRM);
+            Serial.println("[sfx] unmuted");
+        } else if (strcmp(arg, "test") == 0 || *arg == 0) {
+            sfx::set_muted(false);
+            sfx::play(sfx::SFX_CHEST_OPEN);
+            Serial.printf("[sfx] playing chest fanfare (sr=%uHz)\r\n", (unsigned)sfx::sample_rate());
+        } else {
+            int sid = atoi(arg);
+            if (sid >= 0 && sid < sfx::SFX_COUNT) {
+                sfx::play((sfx::Id)sid);
+                Serial.printf("[sfx] play #%d (%s)\r\n", sid, sfx::name((sfx::Id)sid));
+            }
+        }
+        return;
+    }
     if (strcmp(line, "reset") == 0)     { pend_reset = true; return; }
     if (strcmp(line, "hardreset") == 0) { pend_hardreset = true; return; }
     if (strcmp(line, "unlockall") == 0) { pend_unlockall = true; return; }
@@ -345,6 +404,11 @@ static void frame()
         Serial.println("[cmd] unlocked all 64 talents & 36 charms in pool");
     }
     if (pend_give_on) { pend_give_on = false; game::debug_give(pend_give); }
+    if (pend_wave) {
+        uint32_t w = pend_wave; pend_wave = 0;
+        panel_open = false;
+        beat::set_wave(w);
+    }
     if (pend_heal) { pend_heal = false; beat::heal_all(); }
     if (pend_boss) { pend_boss = false; panel_open = false; beat::force_boss(); }
     if (pend_bphase > 0) { int pct = pend_bphase; pend_bphase = 0; panel_open = false; beat::force_boss_phase(pct); }
@@ -355,6 +419,12 @@ static void frame()
         panel_open = true; info_peek = false;
         beat::request_full_restore();
         Serial.println("[cmd] opened lootbox draft");
+    }
+    if (pend_status) {
+        pend_status = false;
+        if (beat::is_title()) beat::set_wave(beat::wave());
+        panel_open = true; info_peek = true;
+        beat::request_full_restore();
     }
     if (pend_pick_c >= 0) {
         int c = pend_pick_c, s = pend_pick_slot; pend_pick_c = -1; pend_pick_slot = -1;
@@ -387,11 +457,6 @@ static void frame()
     if (pend_gameover) { pend_gameover = false; panel_open = false; beat::force_gameover(); }
     if (pend_ending)   { pend_ending = false; panel_open = false; beat::force_ending(); }
     if (pend_save) { pend_save = false; game::save(); Serial.println("[game] saved"); }
-    if (pend_wave) {
-        uint32_t w = pend_wave; pend_wave = 0;
-        panel_open = false;
-        beat::set_wave(w);
-    }
     if (pend_title) {
         pend_title = false;
         panel_open = false; info_peek = false;
@@ -402,13 +467,20 @@ static void frame()
         panel_open = false; info_peek = false;
         beat::force_opening();
     }
+    if (pend_map) {
+        pend_map = false;
+        panel_open = false; info_peek = false;
+        beat::force_map();
+    }
     if (shot_req) { shot_req = false; do_shot(); }
 
     poll_touch();
     game::tick(dt);
-    beat::step();
+    if (!panel_open) {
+        beat::step();
+    }
 
-    if (beat::is_modal_director() && panel_open) {
+    if (!beat::allow_box_button() && beat::is_modal_director() && panel_open) {
         panel_open = false;
         info_peek = false;
         game::st.swap_talent = -1;
@@ -422,9 +494,7 @@ static void frame()
 
     uint16_t* target = canvas[render_idx];
     int64_t render_start = esp_timer_get_time();
-    if (!panel_open) {
-        beat::render(target + 56 * 480, render_idx);
-    }
+    beat::render(target + 56 * 480, render_idx);
     int64_t t_battle = esp_timer_get_time();
     beat::render_hud(target, render_idx);
     int64_t t_hud = esp_timer_get_time();
@@ -516,6 +586,7 @@ void setup()
     canvas[1] = (uint16_t*)g_lcd->getFrameBufferByIndex(1);
     assert(canvas[0] && canvas[1]);
 
+    sfx::init();
     game::init();
     beat::init();
     beat::set_wave(game::st.wave_reached ? game::st.wave_reached : 1);
