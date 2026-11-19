@@ -3,746 +3,1186 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>ルミの水晶庭園 — ESP32-S3 Web Emulator</title>
+  <title>ESP32-S3 · Crystal Garden</title>
   <style>
     :root {
-      --bg-0: #090d16;
-      --bg-1: #111827;
-      --panel: rgba(18, 25, 42, 0.82);
-      --border: rgba(112, 226, 244, 0.18);
-      --border-strong: rgba(112, 226, 244, 0.36);
-      --text: #e6eefc;
-      --muted: #8fa3c4;
+      --fg: rgba(235, 242, 255, 0.88);
+      --muted: rgba(176, 192, 218, 0.58);
       --accent: #70e2f4;
-      --gold: #ffcc44;
-      --violet: #b878ff;
-      --danger: #f45b69;
-      --bezel: #16181f;
-      --bezel-edge: #2c3140;
+      --glass: rgba(15, 19, 28, 0.56);
+      --glass-border: rgba(255, 255, 255, 0.11);
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      --sans: system-ui, -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+      --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
     }
 
     * { box-sizing: border-box; }
 
     html, body {
       margin: 0;
-      min-height: 100%;
-      background:
-        radial-gradient(900px 540px at 20% 10%, rgba(112, 226, 244, 0.11), transparent 60%),
-        radial-gradient(760px 500px at 85% 90%, rgba(184, 120, 255, 0.12), transparent 60%),
-        var(--bg-0);
-      color: var(--text);
-      font-family: var(--sans);
-      -webkit-font-smoothing: antialiased;
-    }
-
-    .page {
-      max-width: 1120px;
-      margin: 0 auto;
-      padding: 16px 16px 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
-
-    header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
-
-    .title-block h1 {
-      margin: 0;
-      font-size: clamp(1.25rem, 2.5vw, 1.6rem);
-      font-weight: 700;
-      letter-spacing: 0.02em;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .badge {
-      font-family: var(--mono);
-      font-size: 0.72rem;
-      font-weight: 600;
-      padding: 3px 8px;
-      border-radius: 999px;
-      background: rgba(112, 226, 244, 0.14);
-      border: 1px solid var(--border-strong);
-      color: var(--accent);
-    }
-
-    .subtitle {
-      margin: 4px 0 0;
-      font-size: 0.86rem;
-      color: var(--muted);
-    }
-
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .btn {
-      appearance: none;
-      border: 1px solid var(--border);
-      background: rgba(255, 255, 255, 0.04);
-      color: var(--text);
-      border-radius: 9px;
-      padding: 7px 12px;
-      font-size: 0.82rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.15s, border-color 0.15s, transform 0.08s;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      user-select: none;
-    }
-
-    .btn:hover {
-      background: rgba(112, 226, 244, 0.12);
-      border-color: var(--border-strong);
-    }
-
-    .btn:active { transform: translateY(1px); }
-
-    .btn.active {
-      background: rgba(112, 226, 244, 0.22);
-      border-color: var(--accent);
-      color: #ffffff;
-    }
-
-    .btn.gold { border-color: rgba(255, 204, 68, 0.35); color: var(--gold); }
-    .btn.gold:hover { background: rgba(255, 204, 68, 0.14); }
-    .btn.violet { border-color: rgba(184, 120, 255, 0.38); color: #d6b2ff; }
-    .btn.violet:hover { background: rgba(184, 120, 255, 0.16); }
-    .btn.danger { border-color: rgba(244, 91, 105, 0.35); color: #ff8e98; }
-    .btn.danger:hover { background: rgba(244, 91, 105, 0.16); }
-
-    .stage {
-      display: grid;
-      grid-template-columns: minmax(0, auto) minmax(300px, 1fr);
-      gap: 22px;
-      align-items: start;
-      justify-content: center;
-    }
-
-    .stage.zen {
-      grid-template-columns: minmax(0, auto);
-    }
-
-    .stage.zen .side-panel {
-      display: none;
-    }
-
-    @media (max-width: 900px) {
-      .stage {
-        grid-template-columns: minmax(0, 1fr);
-        justify-items: center;
-      }
-      .side-panel {
-        width: 100%;
-        max-width: 540px;
-      }
-    }
-
-    /* ---------- Real-Hardware Bezel Frame ---------- */
-    .device-shell {
-      position: relative;
-      background: linear-gradient(145deg, #212530, #11131a 60%, #0b0d12);
-      border: 1px solid #353b4d;
-      border-radius: 26px;
-      padding: 20px 20px 16px;
-      box-shadow:
-        0 24px 60px rgba(0, 0, 0, 0.65),
-        0 0 0 1px rgba(255, 255, 255, 0.04) inset,
-        0 0 42px rgba(112, 226, 244, 0.07);
-      width: min(100%, 524px);
-    }
-
-    .device-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 10px;
-      padding: 0 4px;
-      font-family: var(--mono);
-      font-size: 0.7rem;
-      color: #6f7c96;
-      letter-spacing: 0.06em;
-    }
-
-    .power-led {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .led-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: #4ef09a;
-      box-shadow: 0 0 8px #4ef09a;
-    }
-
-    .screen-frame {
-      position: relative;
-      width: 100%;
-      max-width: 480px;
-      aspect-ratio: 1 / 1;
-      margin: 0 auto;
-      border-radius: 10px;
-      overflow: hidden;
-      background: #05070d;
-      box-shadow:
-        0 0 0 2px #05060a,
-        0 0 0 3px rgba(255, 255, 255, 0.06);
-    }
-
-    canvas#lcd {
-      display: block;
       width: 100%;
       height: 100%;
-      image-rendering: pixelated;
-      image-rendering: crisp-edges;
-      touch-action: none;
-      cursor: pointer;
+      overflow: hidden;
+      background: #14171d;
+      color: var(--fg);
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
       user-select: none;
       -webkit-user-select: none;
     }
 
-    .loading-overlay {
-      position: absolute;
+    #viewport {
+      position: fixed;
       inset: 0;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+
+    /* Minimal corner stamp */
+    .corner-tl {
+      position: fixed;
+      top: max(18px, env(safe-area-inset-top));
+      left: max(20px, env(safe-area-inset-left));
+      pointer-events: none;
       display: flex;
-      flex-direction: column;
       align-items: center;
-      justify-content: center;
-      gap: 12px;
-      background: rgba(7, 10, 18, 0.92);
-      color: var(--accent);
+      gap: 9px;
       font-family: var(--mono);
-      font-size: 0.88rem;
-      transition: opacity 0.25s ease;
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+      text-transform: uppercase;
     }
 
-    .loading-overlay.hidden {
-      display: none;
-    }
-
-    .spinner {
-      width: 30px;
-      height: 30px;
+    .dot-live {
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
-      border: 3px solid rgba(112, 226, 244, 0.2);
-      border-top-color: var(--accent);
-      animation: spin 0.85s linear infinite;
+      background: #4ef09a;
+      box-shadow: 0 0 8px rgba(78, 240, 154, 0.8);
     }
 
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    .device-footer {
-      margin-top: 12px;
+    .corner-tr {
+      position: fixed;
+      top: max(14px, env(safe-area-inset-top));
+      right: max(18px, env(safe-area-inset-right));
       display: flex;
       align-items: center;
-      justify-content: space-between;
       gap: 8px;
-      flex-wrap: wrap;
-      padding: 0 4px;
     }
 
-    .hw-label {
+    .icon-link {
       font-family: var(--mono);
-      font-size: 0.7rem;
-      color: #69758d;
-      letter-spacing: 0.04em;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      text-decoration: none;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      transition: color 0.15s, border-color 0.15s;
     }
 
-    .speed-group {
-      display: inline-flex;
+    .icon-link:hover {
+      color: #fff;
+      border-color: rgba(112, 226, 244, 0.4);
+    }
+
+    /* Bottom floating pill */
+    .dock {
+      position: fixed;
+      left: 50%;
+      bottom: max(18px, env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
       gap: 4px;
+      padding: 5px;
+      border-radius: 999px;
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+      z-index: 10;
     }
 
-    .speed-group .btn {
-      padding: 4px 9px;
-      font-size: 0.74rem;
+    .pill-btn {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
       font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      padding: 7px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: color 0.15s, background 0.15s;
+      white-space: nowrap;
     }
 
-    /* ---------- Side Panel ---------- */
-    .side-panel {
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
+    .pill-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.07); }
+    .pill-btn.active { color: #0b1018; background: var(--accent); }
+
+    .pill-sep {
+      width: 1px;
+      height: 16px;
+      background: rgba(255, 255, 255, 0.12);
+      margin: 0 2px;
     }
 
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 14px 16px;
-      backdrop-filter: blur(10px);
-    }
-
-    .card h2 {
-      margin: 0 0 10px;
-      font-size: 0.88rem;
-      font-weight: 700;
-      color: var(--accent);
-      letter-spacing: 0.04em;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .hint-list {
-      margin: 0;
-      padding-left: 18px;
-      font-size: 0.82rem;
-      line-height: 1.6;
-      color: #c7d4eb;
-    }
-
-    .hint-list strong { color: #ffffff; }
-
-    .demo-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-    }
-
-    .demo-grid .btn {
-      justify-content: center;
-      padding: 8px 10px;
-      font-size: 0.8rem;
-    }
-
-    .serial-log {
-      height: 148px;
-      overflow-y: auto;
-      background: #060911;
-      border: 1px solid rgba(112, 226, 244, 0.16);
-      border-radius: 10px;
+    /* Minimal hidden serial popover */
+    .serial-pop {
+      position: fixed;
+      left: 50%;
+      bottom: calc(max(18px, env(safe-area-inset-bottom)) + 52px);
+      transform: translateX(-50%);
+      width: min(380px, calc(100vw - 28px));
       padding: 10px;
+      border-radius: 14px;
+      background: rgba(10, 13, 20, 0.86);
+      border: 1px solid var(--glass-border);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 12;
+    }
+
+    .serial-pop.open { display: flex; }
+
+    .serial-out {
+      height: 124px;
+      overflow-y: auto;
       font-family: var(--mono);
-      font-size: 0.74rem;
-      line-height: 1.48;
-      color: #b9f0ff;
+      font-size: 11px;
+      line-height: 1.45;
+      color: #a9e9f8;
       white-space: pre-wrap;
       word-break: break-word;
+      user-select: text;
+      -webkit-user-select: text;
     }
 
-    .serial-form {
-      margin-top: 8px;
+    .serial-row {
       display: flex;
       gap: 6px;
     }
 
-    .serial-input {
+    .serial-in {
       flex: 1;
       min-width: 0;
-      background: #080c16;
-      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 8px;
-      padding: 7px 10px;
-      color: var(--text);
+      padding: 6px 10px;
+      color: #fff;
       font-family: var(--mono);
-      font-size: 0.8rem;
+      font-size: 11px;
       outline: none;
     }
 
-    .serial-input:focus {
-      border-color: var(--accent);
-    }
+    .serial-in:focus { border-color: var(--accent); }
 
-    .meta-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
+    /* Minimal credit */
+    .credit {
+      position: fixed;
+      right: max(18px, env(safe-area-inset-right));
+      bottom: max(18px, env(safe-area-inset-bottom));
       font-family: var(--mono);
-      font-size: 0.74rem;
+      font-size: 10.5px;
+      letter-spacing: 0.04em;
       color: var(--muted);
-      margin-top: 8px;
-      flex-wrap: wrap;
-    }
-
-    footer.credit-footer {
-      margin-top: 4px;
-      padding-top: 14px;
-      border-top: 1px solid var(--border);
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      font-size: 0.82rem;
-      color: var(--muted);
-    }
-
-    .credit-author {
-      color: var(--text);
-      font-weight: 600;
-    }
-
-    .credit-links {
       display: flex;
       align-items: center;
-      gap: 14px;
-      flex-wrap: wrap;
-      font-family: var(--mono);
-      font-size: 0.78rem;
+      gap: 8px;
+      z-index: 5;
     }
 
-    .credit-links a {
-      color: var(--accent);
+    .credit a {
+      color: rgba(220, 234, 255, 0.72);
       text-decoration: none;
-      border-bottom: 1px solid transparent;
-      transition: border-color 0.15s, color 0.15s;
+      transition: color 0.15s;
     }
 
-    .credit-links a:hover {
-      color: #ffffff;
-      border-bottom-color: var(--accent);
+    .credit a:hover { color: var(--accent); }
+
+    @media (max-width: 780px) {
+      .credit {
+        left: 50%;
+        right: auto;
+        bottom: max(68px, calc(env(safe-area-inset-bottom) + 64px));
+        transform: translateX(-50%);
+        white-space: nowrap;
+        font-size: 10px;
+      }
+      .serial-pop {
+        bottom: calc(max(18px, env(safe-area-inset-bottom)) + 88px);
+      }
     }
+
+    /* Boot veil */
+    .veil {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      background: #14171d;
+      z-index: 30;
+      transition: opacity 0.35s ease;
+    }
+
+    .veil.gone {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .pulse {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 2px solid rgba(112, 226, 244, 0.22);
+      border-top-color: var(--accent);
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
 </head>
 <body>
-  <div class="page">
-    <header>
-      <div class="title-block">
-        <h1>
-          ルミの水晶庭園
-          <span class="badge">ESP32-S3 → WASM</span>
-        </h1>
-        <p class="subtitle">
-          全50ウェーブ・ローグライト オートバトラー — 実機 C++ ゲームエンジンをそのままブラウザ実行
-        </p>
-      </div>
-      <div class="header-actions">
-        <button class="btn" id="btn-shot" title="480x480 PNG スクリーンショットを保存">📸 スクショ保存</button>
-        <button class="btn" id="btn-zen" title="サイドパネルの表示切替">🖥 筐体のみ</button>
-        <a class="btn" href="https://github.com/kjranyone/esp32-s3-touch" target="_blank" rel="noopener">GitHub ↗</a>
-      </div>
-    </header>
+  <div id="viewport"></div>
 
-    <main class="stage" id="stage">
-      <!-- Real-hardware Bezel Emulator -->
-      <section class="device-shell" aria-label="ESP32-S3 480x480 Smart Screen Emulator">
-        <div class="device-top">
-          <span class="power-led"><span class="led-dot"></span>RUNNING · <span id="stat-fps">--</span> FPS</span>
-          <span id="stat-wave">RUN #1 · WAVE 1/50</span>
-        </div>
-
-        <div class="screen-frame">
-          <canvas id="lcd" width="480" height="480"></canvas>
-          <div class="loading-overlay" id="loading">
-            <div class="spinner"></div>
-            <div id="loading-msg">Booting ESP32-S3 WASM Core...</div>
-          </div>
-        </div>
-
-        <div class="device-footer">
-          <span class="hw-label">ESP32-4848S040C · 4.0&quot; 480×480 RGB565</span>
-          <div class="speed-group" role="group" aria-label="Simulation speed">
-            <button class="btn" data-speed="0">PAUSE</button>
-            <button class="btn active" data-speed="1">1x</button>
-            <button class="btn" data-speed="2">2x</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- Demo & Virtual Serial Side Panel -->
-      <aside class="side-panel">
-        <div class="card">
-          <h2>操作ガイド</h2>
-          <ul class="hint-list">
-            <li><strong>タップ / クリック</strong>: 右下の <code>BOX</code> でルートボックス開封＆3択ドラフト、演出スキップ</li>
-            <li><strong>縦スワイプ（画面中央）</strong>: ルミを<strong>なでなで (PET!)</strong> してドロップ増加バフ</li>
-            <li><strong>セーブデータ</strong>: 実機 NVS と同じくブラウザ (<code>localStorage</code>) に自動保存</li>
-          </ul>
-        </div>
-
-        <div class="card">
-          <h2>デモ・見どころショートカット</h2>
-          <div class="demo-grid">
-            <button class="btn" id="act-pet">✨ なでなで (PET)</button>
-            <button class="btn gold" data-cmd="box">🎁 ルートボックス</button>
-            <button class="btn violet" data-cmd="ult">⚡ 必殺技 (ULT)</button>
-            <button class="btn danger" data-cmd="boss">👹 ボス召喚</button>
-            <button class="btn" data-cmd="wave 50">👑 Wave 50 へ</button>
-            <button class="btn gold" data-cmd="give 500">💎 水晶 +500</button>
-            <button class="btn" data-cmd="unlockall">🔓 全プール解放</button>
-            <button class="btn" data-cmd="reset">🔄 ランやり直し</button>
-          </div>
-          <div class="meta-row">
-            <span>※ 実機のシリアルデバッグコマンドをそのまま実行します</span>
-            <button class="btn danger" id="act-hardreset" style="padding:3px 8px;font-size:0.72rem;">セーブ初期化</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <h2>
-            仮想シリアルコンソール (UART 115200)
-            <button class="btn" id="btn-clear-log" style="padding:2px 8px;font-size:0.7rem;">Clear</button>
-          </h2>
-          <div class="serial-log" id="serial-log"></div>
-          <form class="serial-form" id="serial-form">
-            <input
-              class="serial-input"
-              id="serial-input"
-              type="text"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="コマンド入力 (例: ? / wave 25 / dmg_pct 200 / dump)"
-            />
-            <button class="btn" type="submit">Send</button>
-          </form>
-        </div>
-      </aside>
-    </main>
-
-    <footer class="credit-footer">
-      <div>Created by <span class="credit-author">Kojiro Tanaka</span></div>
-      <div class="credit-links">
-        <a href="https://x.com/mu_sette" target="_blank" rel="noopener">X: @mu_sette ↗</a>
-        <a href="https://oto-nari.com" target="_blank" rel="noopener">Web: https://oto-nari.com ↗</a>
-      </div>
-    </footer>
+  <div class="corner-tl">
+    <span class="dot-live"></span>
+    <span>ESP32-S3</span>
   </div>
 
-  <script src="crystal_garden.js"></script>
-  <script>
-    (() => {
-      const canvas = document.getElementById('lcd');
-      const ctx = canvas.getContext('2d', { alpha: false });
-      const loadingEl = document.getElementById('loading');
-      const loadingMsg = document.getElementById('loading-msg');
-      const serialLogEl = document.getElementById('serial-log');
-      const serialForm = document.getElementById('serial-form');
-      const serialInput = document.getElementById('serial-input');
-      const statFps = document.getElementById('stat-fps');
-      const statWave = document.getElementById('stat-wave');
-      const stageEl = document.getElementById('stage');
+  <div class="corner-tr">
+    <a class="icon-link" href="https://github.com/kjranyone/esp32-s3-touch" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
 
-      let logLines = [];
-      let logBuf = '';
-      window.onEmulatorSerial = (chunk) => {
-        logBuf += chunk;
-        const parts = logBuf.split('\n');
-        logBuf = parts.pop();
-        for (const p of parts) {
-          logLines.push(p.replace(/\r/g, ''));
+  <div class="serial-pop" id="serial-pop">
+    <div class="serial-out" id="serial-out"></div>
+    <form class="serial-row" id="serial-form">
+      <input class="serial-in" id="serial-in" type="text" autocomplete="off" spellcheck="false" placeholder="UART 115200 (boss / ult / box / wave 50 / ?)" />
+      <button class="pill-btn active" type="submit">TX</button>
+    </form>
+  </div>
+
+  <nav class="dock" aria-label="View controls">
+    <button class="pill-btn active" data-view="iso">3D</button>
+    <button class="pill-btn" data-view="front">FRONT</button>
+    <button class="pill-btn" data-view="pcb">PCB</button>
+    <span class="pill-sep"></span>
+    <button class="pill-btn" id="btn-speed">1x</button>
+    <button class="pill-btn" id="btn-uart" title="UART">&gt;_</button>
+  </nav>
+
+  <footer class="credit">
+    <span>Created by Kojiro Tanaka</span>
+    <span>·</span>
+    <a href="https://x.com/mu_sette" target="_blank" rel="noopener">@mu_sette</a>
+    <span>·</span>
+    <a href="https://oto-nari.com" target="_blank" rel="noopener">oto-nari.com</a>
+  </footer>
+
+  <div class="veil" id="veil"><div class="pulse"></div></div>
+
+  <script src="crystal_garden.js"></script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+    /* ============================================================
+     * 1. Offscreen 480x480 LCD Surface (WASM Framebuffer Target)
+     * ============================================================ */
+    const lcdCanvas = document.createElement('canvas');
+    lcdCanvas.width = 480;
+    lcdCanvas.height = 480;
+    const lcdCtx = lcdCanvas.getContext('2d', { alpha: false });
+    lcdCtx.fillStyle = '#070a12';
+    lcdCtx.fillRect(0, 0, 480, 480);
+
+    const lcdTexture = new THREE.CanvasTexture(lcdCanvas);
+    lcdTexture.colorSpace = THREE.SRGBColorSpace;
+    lcdTexture.minFilter = THREE.LinearFilter;
+    lcdTexture.magFilter = THREE.NearestFilter;
+    lcdTexture.generateMipmaps = false;
+
+    /* ============================================================
+     * 2. Procedural Textures (Cutting Mat & ESP32-S3 Back PCB)
+     * ============================================================ */
+    function makeCuttingMatTexture() {
+      const c = document.createElement('canvas');
+      c.width = 2048;
+      c.height = 2048;
+      const g = c.getContext('2d');
+
+      g.fillStyle = '#252930';
+      g.fillRect(0, 0, 2048, 2048);
+
+      // Subtle matte grain
+      g.fillStyle = 'rgba(255,255,255,0.014)';
+      for (let i = 0; i < 14000; i++) {
+        g.fillRect((Math.random() * 2048) | 0, (Math.random() * 2048) | 0, 2, 2);
+      }
+
+      const step = 64; // 10mm grid
+      // Fine 10mm grid
+      g.strokeStyle = 'rgba(220, 230, 242, 0.14)';
+      g.lineWidth = 1.5;
+      g.beginPath();
+      for (let x = 0; x <= 2048; x += step) {
+        g.moveTo(x, 0); g.lineTo(x, 2048);
+        g.moveTo(0, x); g.lineTo(2048, x);
+      }
+      g.stroke();
+
+      // Major 50mm grid
+      g.strokeStyle = 'rgba(235, 242, 250, 0.28)';
+      g.lineWidth = 2.4;
+      g.beginPath();
+      for (let x = 0; x <= 2048; x += step * 5) {
+        g.moveTo(x, 0); g.lineTo(x, 2048);
+        g.moveTo(0, x); g.lineTo(2048, x);
+      }
+      g.stroke();
+
+      // Diagonal angle guide lines (like real cutting mat)
+      g.strokeStyle = 'rgba(220, 230, 242, 0.12)';
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.moveTo(0, 2048); g.lineTo(2048, 0);
+      g.moveTo(0, 1024); g.lineTo(1024, 0);
+      g.moveTo(1024, 2048); g.lineTo(2048, 1024);
+      g.stroke();
+
+      // Center cross ticks
+      g.fillStyle = 'rgba(225, 235, 245, 0.24)';
+      g.font = '600 18px ui-monospace, monospace';
+      for (let i = 1; i <= 6; i++) {
+        g.fillText(String(i * 5), i * step * 5 + 6, 2048 - 14);
+      }
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(3, 3);
+      tex.anisotropy = 8;
+      return tex;
+    }
+
+    function makePcbTexture() {
+      const c = document.createElement('canvas');
+      c.width = 1024;
+      c.height = 1024;
+      const g = c.getContext('2d');
+
+      // Matte black solder mask
+      g.fillStyle = '#12161b';
+      g.fillRect(0, 0, 1024, 1024);
+
+      // Subtle dark-green/slate copper traces
+      g.strokeStyle = '#1d272e';
+      g.lineWidth = 5;
+      for (let i = 0; i < 24; i++) {
+        const y = 170 + i * 26;
+        g.beginPath();
+        g.moveTo(90, y);
+        g.lineTo(280 + (i % 5) * 18, y);
+        g.lineTo(340 + (i % 5) * 18, y + 36);
+        g.lineTo(660, y + 36);
+        g.stroke();
+      }
+      for (let i = 0; i < 16; i++) {
+        const x = 140 + i * 44;
+        g.beginPath();
+        g.moveTo(x, 120);
+        g.lineTo(x, 420);
+        g.lineTo(x + 28, 448);
+        g.lineTo(x + 28, 860);
+        g.stroke();
+      }
+
+      // Gold ENIG vias
+      for (let i = 0; i < 65; i++) {
+        const vx = 90 + ((i * 137) % 840);
+        const vy = 90 + ((i * 223) % 840);
+        g.fillStyle = '#c9a24b';
+        g.beginPath(); g.arc(vx, vy, 5.5, 0, Math.PI * 2); g.fill();
+        g.fillStyle = '#090b0e';
+        g.beginPath(); g.arc(vx, vy, 2.3, 0, Math.PI * 2); g.fill();
+      }
+
+      // Silkscreen frame & markings
+      g.strokeStyle = 'rgba(235, 240, 248, 0.58)';
+      g.lineWidth = 3;
+      g.strokeRect(42, 42, 940, 940);
+
+      g.fillStyle = 'rgba(235, 240, 248, 0.85)';
+      g.font = '700 28px ui-monospace, monospace';
+      g.fillText('ESP32-4848S040C_I_Y_3', 84, 118);
+
+      g.fillStyle = 'rgba(210, 224, 240, 0.62)';
+      g.font = '600 18px ui-monospace, monospace';
+      g.fillText('ESP32-S3R8 · 16MB FLASH · 8MB OPI PSRAM', 84, 152);
+      g.fillText('ST7701 RGB565 480x480 · GT911 I2C', 84, 180);
+
+      // Component labels
+      g.font = '700 16px ui-monospace, monospace';
+      g.fillStyle = 'rgba(225, 232, 240, 0.72)';
+      g.fillText('U1  ESP32-S3-WROOM-1', 515, 212);
+      g.fillText('U2  CH340C', 110, 560);
+      g.fillText('TF_CARD', 115, 280);
+      g.fillText('SPK', 120, 745);
+      g.fillText('USB-C 5V', 435, 922);
+      g.fillText('BOOT', 760, 882);
+      g.fillText('RST', 845, 882);
+      g.fillText('RELAY / IO', 640, 760);
+
+      // Gold test pads row
+      for (let i = 0; i < 10; i++) {
+        const px = 135 + i * 32;
+        g.fillStyle = '#d4af52';
+        g.fillRect(px, 845, 16, 26);
+      }
+      g.fillStyle = 'rgba(225, 232, 240, 0.6)';
+      g.font = '600 13px ui-monospace, monospace';
+      g.fillText('3V3 GND TX RX IO1 IO2 IO40 SCL SDA EN', 130, 892);
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 8;
+      return tex;
+    }
+
+    function makeEspShieldTexture() {
+      const c = document.createElement('canvas');
+      c.width = 512;
+      c.height = 512;
+      const g = c.getContext('2d');
+
+      // Brushed stainless steel
+      const grad = g.createLinearGradient(0, 0, 512, 512);
+      grad.addColorStop(0, '#c8cfd8');
+      grad.addColorStop(0.5, '#aeb6c2');
+      grad.addColorStop(1, '#98a1ae');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 512, 512);
+
+      g.strokeStyle = 'rgba(255,255,255,0.08)';
+      g.lineWidth = 2;
+      for (let y = 0; y < 512; y += 6) {
+        g.beginPath(); g.moveTo(0, y); g.lineTo(512, y); g.stroke();
+      }
+
+      // Laser etched Espressif-style branding
+      g.fillStyle = '#383e48';
+      g.beginPath();
+      g.arc(96, 118, 34, 0, Math.PI * 2);
+      g.strokeStyle = '#383e48';
+      g.lineWidth = 7;
+      g.stroke();
+      g.font = '700 26px ui-monospace, monospace';
+      g.fillText('Wi-Fi', 152, 112);
+      g.font = '600 20px ui-monospace, monospace';
+      g.fillText('BLE 5.0', 152, 140);
+
+      g.font = '700 34px ui-monospace, monospace';
+      g.fillText('ESP32-S3', 64, 232);
+      g.font = '700 28px ui-monospace, monospace';
+      g.fillText('WROOM-1', 64, 272);
+
+      g.font = '600 21px ui-monospace, monospace';
+      g.fillStyle = '#484f5c';
+      g.fillText('N16R8  240MHz', 64, 326);
+      g.fillText('DUAL-CORE LX7', 64, 358);
+
+      // Tiny QR-like matrix
+      g.fillStyle = '#3a404a';
+      for (let r = 0; r < 7; r++) {
+        for (let col = 0; col < 7; col++) {
+          if (((r * 7 + col * 3 + r * col) % 3) !== 0 || (r < 2 && col < 2)) {
+            g.fillRect(344 + col * 14, 344 + r * 14, 11, 11);
+          }
         }
-        if (logLines.length > 200) {
-          logLines = logLines.slice(logLines.length - 200);
+      }
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 8;
+      return tex;
+    }
+
+    function makeAntennaTexture() {
+      const c = document.createElement('canvas');
+      c.width = 256;
+      c.height = 128;
+      const g = c.getContext('2d');
+      g.fillStyle = '#14181e';
+      g.fillRect(0, 0, 256, 128);
+      g.strokeStyle = '#d4af52';
+      g.lineWidth = 10;
+      g.lineCap = 'square';
+      g.beginPath();
+      g.moveTo(28, 118);
+      g.lineTo(28, 28);
+      g.lineTo(96, 28);
+      g.lineTo(96, 86);
+      g.lineTo(154, 86);
+      g.lineTo(154, 28);
+      g.lineTo(222, 28);
+      g.lineTo(222, 92);
+      g.stroke();
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    /* ============================================================
+     * 3. Geometry Helpers
+     * ============================================================ */
+    function roundedRectShape(w, h, r) {
+      const s = new THREE.Shape();
+      const x = -w / 2, y = -h / 2;
+      s.moveTo(x + r, y);
+      s.lineTo(x + w - r, y);
+      s.quadraticCurveTo(x + w, y, x + w, y + r);
+      s.lineTo(x + w, y + h - r);
+      s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      s.lineTo(x + r, y + h);
+      s.quadraticCurveTo(x, y + h, x, y + h - r);
+      s.lineTo(x, y + r);
+      s.quadraticCurveTo(x, y, x + r, y);
+      return s;
+    }
+
+    /* ============================================================
+     * 4. Three.js Scene Setup
+     * ============================================================ */
+    const container = document.getElementById('viewport');
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#16191f');
+    scene.fog = new THREE.FogExp2('#16191f', 0.022);
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environmentIntensity = 0.72;
+
+    const camera = new THREE.PerspectiveCamera(34, window.innerWidth / window.innerHeight, 0.1, 200);
+    camera.position.set(4.8, 6.2, 16.2);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.075;
+    controls.enablePan = false;
+    controls.minDistance = 8.5;
+    controls.maxDistance = 40;
+    controls.maxPolarAngle = Math.PI * 0.495;
+    controls.target.set(0, 4.45, 0);
+    controls.update();
+
+    /* Lights */
+    const keyLight = new THREE.DirectionalLight(0xfff7ee, 2.2);
+    keyLight.position.set(10, 18, 12);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(2048, 2048);
+    keyLight.shadow.camera.near = 2;
+    keyLight.shadow.camera.far = 45;
+    keyLight.shadow.camera.left = -14;
+    keyLight.shadow.camera.right = 14;
+    keyLight.shadow.camera.top = 14;
+    keyLight.shadow.camera.bottom = -14;
+    keyLight.shadow.bias = -0.0005;
+    scene.add(keyLight);
+
+    const rimLight = new THREE.DirectionalLight(0x88c8ff, 0.9);
+    rimLight.position.set(-12, 10, -14);
+    scene.add(rimLight);
+
+    // Dynamic bounce light fed by real-time LCD average color
+    const lcdGlowLight = new THREE.PointLight(0x70e2f4, 2.4, 16, 1.8);
+    lcdGlowLight.position.set(0, 4.5, 2.2);
+    scene.add(lcdGlowLight);
+
+    /* Cutting Mat Table */
+    const matGeo = new THREE.PlaneGeometry(96, 96);
+    const matMaterial = new THREE.MeshStandardMaterial({
+      map: makeCuttingMatTexture(),
+      roughness: 0.86,
+      metalness: 0.04,
+    });
+    const cuttingMat = new THREE.Mesh(matGeo, matMaterial);
+    cuttingMat.rotation.x = -Math.PI / 2;
+    cuttingMat.receiveShadow = true;
+    scene.add(cuttingMat);
+
+    /* ============================================================
+     * 5. JingCai ESP32-4848S040C 3D Hardware Assembly (1 unit = 10mm)
+     * ============================================================ */
+    const devicePivot = new THREE.Group();
+    // Slight ergonomic desk-stand tilt, resting cleanly on the cutting mat
+    devicePivot.position.set(0, 4.38, 0);
+    devicePivot.rotation.x = -0.14;
+    scene.add(devicePivot);
+
+    // 5a. Outer dark-metallic frame (86mm x 86mm x 10.2mm)
+    const bodyW = 8.6, bodyH = 8.6, bodyD = 0.92;
+    const shellGeo = new THREE.ExtrudeGeometry(roundedRectShape(bodyW, bodyH, 0.3), {
+      depth: bodyD,
+      bevelEnabled: true,
+      bevelThickness: 0.07,
+      bevelSize: 0.06,
+      bevelSegments: 4,
+    });
+    shellGeo.center();
+    const shellMat = new THREE.MeshStandardMaterial({
+      color: '#2a2e36',
+      metalness: 0.62,
+      roughness: 0.34,
+    });
+    const shellMesh = new THREE.Mesh(shellGeo, shellMat);
+    shellMesh.castShadow = true;
+    shellMesh.receiveShadow = true;
+    devicePivot.add(shellMesh);
+
+    // 5b. Front full-face black cover glass bezel (matching real photo)
+    const bezelGeo = new THREE.ShapeGeometry(roundedRectShape(8.46, 8.46, 0.24));
+    const bezelMat = new THREE.MeshPhysicalMaterial({
+      color: '#0c0d11',
+      roughness: 0.08,
+      metalness: 0.06,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.06,
+    });
+    const bezelMesh = new THREE.Mesh(bezelGeo, bezelMat);
+    bezelMesh.position.z = bodyD / 2 + 0.075;
+    devicePivot.add(bezelMesh);
+
+    // 5c. Active 4.0" 480x480 RGB565 LCD (WASM CanvasTexture projection)
+    const lcdSize = 7.18;
+    const lcdGeo = new THREE.PlaneGeometry(lcdSize, lcdSize);
+    const lcdMat = new THREE.MeshBasicMaterial({
+      map: lcdTexture,
+      toneMapped: false,
+    });
+    const lcdMesh = new THREE.Mesh(lcdGeo, lcdMat);
+    lcdMesh.position.z = bodyD / 2 + 0.082;
+    lcdMesh.name = 'lcd-touch-surface';
+    devicePivot.add(lcdMesh);
+
+    // 5d. Ultra-thin reflective cover glass over LCD (catches studio highlights)
+    const glassOverlay = new THREE.Mesh(
+      new THREE.PlaneGeometry(lcdSize + 0.02, lcdSize + 0.02),
+      new THREE.MeshPhysicalMaterial({
+        color: '#ffffff',
+        transparent: true,
+        opacity: 0.06,
+        roughness: 0.05,
+        metalness: 0.0,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.04,
+        depthWrite: false,
+      })
+    );
+    glassOverlay.position.z = bodyD / 2 + 0.092;
+    devicePivot.add(glassOverlay);
+
+    // 5e. Back PCB Board (recessed slightly inside rear frame)
+    const backGroup = new THREE.Group();
+    backGroup.position.z = -(bodyD / 2 + 0.06);
+    backGroup.rotation.y = Math.PI; // local +Z faces outward from back
+    devicePivot.add(backGroup);
+
+    const pcbMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(7.92, 7.92, 0.14),
+      new THREE.MeshStandardMaterial({
+        map: makePcbTexture(),
+        roughness: 0.52,
+        metalness: 0.18,
+      })
+    );
+    pcbMesh.position.z = 0.07;
+    pcbMesh.castShadow = true;
+    backGroup.add(pcbMesh);
+
+    // 5f. ESP32-S3-WROOM-1 Module (Hero IoT Component!)
+    const espGroup = new THREE.Group();
+    espGroup.position.set(1.15, 0.85, 0.14);
+    backGroup.add(espGroup);
+
+    // Module carrier PCB
+    const espCarrier = new THREE.Mesh(
+      new THREE.BoxGeometry(1.85, 2.58, 0.09),
+      new THREE.MeshStandardMaterial({ color: '#14191f', roughness: 0.55, metalness: 0.15 })
+    );
+    espCarrier.position.z = 0.045;
+    espGroup.add(espCarrier);
+
+    // PCB Meander Antenna section at top of WROOM module
+    const antPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.72, 0.68),
+      new THREE.MeshStandardMaterial({ map: makeAntennaTexture(), roughness: 0.45, metalness: 0.35 })
+    );
+    antPlane.position.set(0, 0.92, 0.095);
+    espGroup.add(antPlane);
+
+    // Stainless Steel RF Shield Can with laser-etched ESP32-S3-WROOM-1
+    const shieldMat = new THREE.MeshStandardMaterial({
+      map: makeEspShieldTexture(),
+      metalness: 0.84,
+      roughness: 0.24,
+    });
+    const shieldSideMat = new THREE.MeshStandardMaterial({
+      color: '#b5bdc9',
+      metalness: 0.88,
+      roughness: 0.22,
+    });
+    const shieldCan = new THREE.Mesh(
+      new THREE.BoxGeometry(1.66, 1.78, 0.28),
+      [shieldSideMat, shieldSideMat, shieldSideMat, shieldSideMat, shieldMat, shieldSideMat]
+    );
+    shieldCan.position.set(0, -0.34, 0.22);
+    shieldCan.castShadow = true;
+    espGroup.add(shieldCan);
+
+    // Castellated gold solder pads along WROOM edges
+    const goldMat = new THREE.MeshStandardMaterial({ color: '#d8b454', metalness: 0.9, roughness: 0.25 });
+    const padGeo = new THREE.BoxGeometry(0.11, 0.06, 0.06);
+    for (let i = 0; i < 14; i++) {
+      const py = -1.16 + i * 0.145;
+      const pL = new THREE.Mesh(padGeo, goldMat); pL.position.set(-0.92, py, 0.05); espGroup.add(pL);
+      const pR = new THREE.Mesh(padGeo, goldMat); pR.position.set( 0.92, py, 0.05); espGroup.add(pR);
+    }
+
+    // 5g. Secondary PCB Components (CH340, TF slot, relays, connectors, tact buttons, LEDs)
+    const icMat = new THREE.MeshStandardMaterial({ color: '#1b1d22', roughness: 0.42, metalness: 0.12 });
+    const metalMat = new THREE.MeshStandardMaterial({ color: '#c4cbd6', metalness: 0.86, roughness: 0.26 });
+
+    // CH340C USB-Serial IC
+    const ch340 = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.42, 0.14), icMat);
+    ch340.position.set(-2.2, -0.65, 0.21);
+    backGroup.add(ch340);
+
+    // MicroSD / TF Card Metal Cage
+    const tfSlot = new THREE.Mesh(new THREE.BoxGeometry(1.38, 1.48, 0.2), metalMat);
+    tfSlot.position.set(-2.35, 1.25, 0.24);
+    backGroup.add(tfSlot);
+
+    // White JST Connector
+    const jst = new THREE.Mesh(
+      new THREE.BoxGeometry(0.75, 0.5, 0.34),
+      new THREE.MeshStandardMaterial({ color: '#e6e8ec', roughness: 0.5 })
+    );
+    jst.position.set(-2.65, -2.05, 0.31);
+    backGroup.add(jst);
+
+    // Green IoT Relay / Terminal Block (smart-switch heritage)
+    const termBlock = new THREE.Mesh(
+      new THREE.BoxGeometry(1.9, 0.72, 0.52),
+      new THREE.MeshStandardMaterial({ color: '#1f6f4a', roughness: 0.48, metalness: 0.08 })
+    );
+    termBlock.position.set(1.75, -1.95, 0.4);
+    termBlock.castShadow = true;
+    backGroup.add(termBlock);
+
+    for (let i = 0; i < 4; i++) {
+      const screw = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.06, 12), metalMat);
+      screw.rotation.x = Math.PI / 2;
+      screw.position.set(1.1 + i * 0.43, -1.95, 0.67);
+      backGroup.add(screw);
+    }
+
+    // BOOT & RST Tact Switches
+    for (const bx of [2.45, 3.1]) {
+      const swBase = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.28, 0.14), metalMat);
+      swBase.position.set(bx, -3.15, 0.21);
+      backGroup.add(swBase);
+      const swCap = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.08, 12), icMat);
+      swCap.rotation.x = Math.PI / 2;
+      swCap.position.set(bx, -3.15, 0.31);
+      backGroup.add(swCap);
+    }
+
+    // SMD capacitors / resistors cluster
+    const smdBodyMat = new THREE.MeshStandardMaterial({ color: '#9c7344', roughness: 0.4, metalness: 0.2 });
+    for (let i = 0; i < 18; i++) {
+      const sx = -1.6 + (i % 6) * 0.34;
+      const sy = -1.65 - Math.floor(i / 6) * 0.32;
+      const smd = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.09, 0.07), i % 3 === 0 ? icMat : smdBodyMat);
+      smd.position.set(sx, sy, 0.175);
+      backGroup.add(smd);
+    }
+
+    // 4 Corner Mounting Screws
+    for (const [sx, sy] of [[-3.55, 3.55], [3.55, 3.55], [-3.55, -3.55], [3.55, -3.55]]) {
+      const sc = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.06, 16), metalMat);
+      sc.rotation.x = Math.PI / 2;
+      sc.position.set(sx, sy, 0.17);
+      backGroup.add(sc);
+    }
+
+    // USB Type-C Receptacle on bottom center of back PCB
+    const usbcReceptacle = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.72, 0.34), metalMat);
+    usbcReceptacle.position.set(0, -3.58, 0.31);
+    backGroup.add(usbcReceptacle);
+
+    // Power LED (warm red) & Active Status LED (cyan pulse)
+    const pwrLedMat = new THREE.MeshBasicMaterial({ color: 0xff3b4d });
+    const pwrLed = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.08), pwrLedMat);
+    pwrLed.position.set(-0.95, -3.28, 0.18);
+    backGroup.add(pwrLed);
+
+    const actLedMat = new THREE.MeshBasicMaterial({ color: 0x54f0ff });
+    const actLed = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.08), actLedMat);
+    actLed.position.set(-0.62, -3.28, 0.18);
+    backGroup.add(actLed);
+
+    const pcbLedGlow = new THREE.PointLight(0xff4055, 0.55, 3.2, 2);
+    pcbLedGlow.position.set(-0.85, -3.28, 0.55);
+    backGroup.add(pcbLedGlow);
+
+    // 5h. Minimalist Aluminum Desk Stand (keeps back PCB completely open!)
+    const standMat = new THREE.MeshStandardMaterial({ color: '#1b1e25', metalness: 0.72, roughness: 0.34 });
+    const standBase = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.14, 2.2), standMat);
+    standBase.position.set(0, 0.07, -0.35);
+    standBase.castShadow = true;
+    standBase.receiveShadow = true;
+    scene.add(standBase);
+
+    for (const sx of [-1.55, 1.55]) {
+      const foot = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.75, 0.42), standMat);
+      foot.position.set(sx, 0.4, 0.48);
+      foot.rotation.x = -0.14;
+      foot.castShadow = true;
+      scene.add(foot);
+    }
+
+    // 5i. Braided Black USB-C Cable running from bottom USB-C port across cutting mat
+    const cableCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, 0.85, -0.78),
+      new THREE.Vector3(0, 0.36, -1.75),
+      new THREE.Vector3(0.55, 0.15, -3.8),
+      new THREE.Vector3(2.1, 0.15, -7.8),
+      new THREE.Vector3(1.4, 0.15, -15.0),
+      new THREE.Vector3(2.6, 0.15, -26.0),
+    ]);
+    const cableMesh = new THREE.Mesh(
+      new THREE.TubeGeometry(cableCurve, 64, 0.14, 12, false),
+      new THREE.MeshStandardMaterial({ color: '#17191f', roughness: 0.78, metalness: 0.08 })
+    );
+    cableMesh.castShadow = true;
+    cableMesh.receiveShadow = true;
+    scene.add(cableMesh);
+
+    // USB-C plug boot aligned cleanly into bottom receptacle
+    const plugBoot = new THREE.Mesh(
+      new THREE.BoxGeometry(0.64, 0.68, 0.34),
+      new THREE.MeshStandardMaterial({ color: '#1b1e26', roughness: 0.55, metalness: 0.2 })
+    );
+    plugBoot.position.set(0, 0.94, -0.68);
+    plugBoot.rotation.x = 0.28;
+    plugBoot.castShadow = true;
+    scene.add(plugBoot);
+
+    /* ============================================================
+     * 6. Camera Presets & Smooth Tweening (responsive to aspect)
+     * ============================================================ */
+    const BASE_VIEWS = {
+      iso:   { pos: new THREE.Vector3(6.8, 7.6, 18.4),  target: new THREE.Vector3(0, 4.1, 0) },
+      front: { pos: new THREE.Vector3(0.0, 6.2, 16.8),  target: new THREE.Vector3(0, 4.15, 0) },
+      pcb:   { pos: new THREE.Vector3(-5.6, 6.4, -17.4), target: new THREE.Vector3(0, 4.1, 0) },
+    };
+
+    function getResponsiveView(name) {
+      const base = BASE_VIEWS[name] || BASE_VIEWS.iso;
+      const aspect = window.innerWidth / Math.max(1, window.innerHeight);
+      const distScale = aspect < 1.05 ? (1.05 / Math.max(0.45, aspect)) : 1.0;
+      const dir = base.pos.clone().sub(base.target).multiplyScalar(distScale);
+      return {
+        pos: base.target.clone().add(dir),
+        target: base.target.clone(),
+      };
+    }
+
+    let currentViewName = 'iso';
+    let camAnim = null;
+    function setView(name, immediate = false) {
+      if (!BASE_VIEWS[name]) return;
+      currentViewName = name;
+      const v = getResponsiveView(name);
+      if (immediate) {
+        camAnim = null;
+        camera.position.copy(v.pos);
+        controls.target.copy(v.target);
+        controls.update();
+      } else {
+        camAnim = {
+          t0: performance.now(),
+          dur: 680,
+          p0: camera.position.clone(),
+          p1: v.pos.clone(),
+          tStart: controls.target.clone(),
+          tEnd: v.target.clone(),
+        };
+      }
+      document.querySelectorAll('[data-view]').forEach((b) => {
+        b.classList.toggle('active', b.dataset.view === name);
+      });
+    }
+
+    setView('iso', true);
+
+    document.querySelectorAll('[data-view]').forEach((btn) => {
+      btn.addEventListener('click', () => setView(btn.dataset.view));
+    });
+
+    controls.addEventListener('start', () => { camAnim = null; });
+
+    /* ============================================================
+     * 7. Direct 3D Raycast Touch Input onto the LCD Surface
+     * ============================================================ */
+    const raycaster = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    let api = null;
+    let lcdPointerId = null;
+
+    function hitLcd(ev) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObject(lcdMesh, false);
+      if (hits.length === 0 || !hits[0].uv) return null;
+      const uv = hits[0].uv;
+      return [
+        Math.max(0, Math.min(479, Math.floor(uv.x * 480))),
+        Math.max(0, Math.min(479, Math.floor((1 - uv.y) * 480))),
+      ];
+    }
+
+    renderer.domElement.addEventListener('pointerdown', (ev) => {
+      if (!api || lcdPointerId !== null) return;
+      const pt = hitLcd(ev);
+      if (!pt) return;
+      lcdPointerId = ev.pointerId;
+      controls.enabled = false;
+      renderer.domElement.setPointerCapture(ev.pointerId);
+      api.pointerDown(pt[0], pt[1]);
+    }, true);
+
+    renderer.domElement.addEventListener('pointermove', (ev) => {
+      if (lcdPointerId === ev.pointerId && api) {
+        const pt = hitLcd(ev);
+        if (pt) api.pointerMove(pt[0], pt[1]);
+        return;
+      }
+      if (lcdPointerId === null) {
+        renderer.domElement.style.cursor = hitLcd(ev) ? 'pointer' : 'grab';
+      }
+    });
+
+    function releaseLcdPointer(ev) {
+      if (lcdPointerId !== ev.pointerId) return;
+      lcdPointerId = null;
+      controls.enabled = true;
+      if (api) {
+        const pt = hitLcd(ev);
+        api.pointerUp(pt ? pt[0] : 240, pt ? pt[1] : 240);
+      }
+    }
+    renderer.domElement.addEventListener('pointerup', releaseLcdPointer);
+    renderer.domElement.addEventListener('pointercancel', releaseLcdPointer);
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    /* ============================================================
+     * 8. Minimal UART Popover & Speed Toggle
+     * ============================================================ */
+    const serialPop = document.getElementById('serial-pop');
+    const serialOut = document.getElementById('serial-out');
+    const serialForm = document.getElementById('serial-form');
+    const serialIn = document.getElementById('serial-in');
+    const btnUart = document.getElementById('btn-uart');
+    const btnSpeed = document.getElementById('btn-speed');
+
+    let logLines = [];
+    let logBuf = '';
+    window.onEmulatorSerial = (chunk) => {
+      logBuf += chunk;
+      const parts = logBuf.split('\n');
+      logBuf = parts.pop();
+      for (const p of parts) logLines.push(p.replace(/\r/g, ''));
+      if (logLines.length > 140) logLines = logLines.slice(-140);
+      serialOut.textContent = logLines.join('\n') + (logBuf ? '\n' + logBuf : '');
+      serialOut.scrollTop = serialOut.scrollHeight;
+    };
+
+    btnUart.addEventListener('click', () => {
+      const open = serialPop.classList.toggle('open');
+      btnUart.classList.toggle('active', open);
+      if (open) serialIn.focus();
+    });
+
+    serialForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = serialIn.value.trim();
+      if (!v || !api) return;
+      api.sendCommand(v);
+      serialIn.value = '';
+    });
+
+    let speedMult = 1;
+    btnSpeed.addEventListener('click', () => {
+      speedMult = speedMult === 1 ? 2 : 1;
+      btnSpeed.textContent = speedMult + 'x';
+      btnSpeed.classList.toggle('active', speedMult === 2);
+    });
+
+    /* ============================================================
+     * 9. Boot WASM Core & Main 60Hz Loop
+     * ============================================================ */
+    const urlParams = new URLSearchParams(location.search);
+    const startView = urlParams.get('view');
+    if (startView && BASE_VIEWS[startView]) {
+      setView(startView, true);
+    }
+
+    const imgData = lcdCtx.createImageData(480, 480);
+    let mod = null;
+
+    function updateGlowColor(bytes) {
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let y = 80; y < 400; y += 32) {
+        for (let x = 40; x < 440; x += 40) {
+          const idx = (y * 480 + x) * 4;
+          r += bytes[idx];
+          g += bytes[idx + 1];
+          b += bytes[idx + 2];
+          n++;
         }
-        serialLogEl.textContent = logLines.join('\n') + (logBuf ? '\n' + logBuf : '');
-        serialLogEl.scrollTop = serialLogEl.scrollHeight;
+      }
+      if (n > 0) {
+        lcdGlowLight.color.setRGB(
+          Math.min(1, (r / n) / 200),
+          Math.min(1, (g / n) / 200),
+          Math.min(1, (b / n) / 200)
+        );
+      }
+    }
+
+    function blitLcd(sampleGlow) {
+      if (!api || !mod) return;
+      const ptr = api.getRgbaPtr();
+      const bytes = mod.HEAPU8.subarray(ptr, ptr + 480 * 480 * 4);
+      imgData.data.set(bytes);
+      lcdCtx.putImageData(imgData, 0, 0);
+      lcdTexture.needsUpdate = true;
+      if (sampleGlow) updateGlowColor(bytes);
+    }
+
+    createCrystalGarden().then((Module) => {
+      mod = Module;
+      api = {
+        init: Module.cwrap('emu_init', null, []),
+        step: Module.cwrap('emu_step', null, ['number']),
+        render: Module.cwrap('emu_render', null, []),
+        getRgbaPtr: Module.cwrap('emu_get_rgba_ptr', 'number', []),
+        pointerDown: Module.cwrap('emu_pointer_down', null, ['number', 'number']),
+        pointerMove: Module.cwrap('emu_pointer_move', null, ['number', 'number']),
+        pointerUp: Module.cwrap('emu_pointer_up', null, ['number', 'number']),
+        sendCommand: Module.cwrap('emu_send_command', null, ['string']),
+        save: Module.cwrap('emu_save', null, []),
       };
 
-      const cmdHistory = [];
-      let cmdHistIdx = -1;
-      let speedMult = 1;
-      let mod = null;
-      let api = null;
-
-      function sendCmd(cmd) {
-        if (!api || !cmd.trim()) return;
-        api.sendCommand(cmd.trim());
+      api.init();
+      const initCmd = urlParams.get('cmd');
+      if (initCmd) {
+        initCmd.split(';').forEach((c) => { if (c.trim()) api.sendCommand(c.trim()); });
+        api.step(1 / 60);
+        api.render();
       }
+      blitLcd(true);
 
-      document.getElementById('btn-zen').addEventListener('click', (e) => {
-        const zen = stageEl.classList.toggle('zen');
-        e.currentTarget.classList.toggle('active', zen);
-        e.currentTarget.textContent = zen ? '🛠 パネル表示' : '🖥 筐体のみ';
-      });
+      const veil = document.getElementById('veil');
+      veil.classList.add('gone');
+      setTimeout(() => veil.remove(), 400);
 
-      document.getElementById('btn-clear-log').addEventListener('click', () => {
-        logLines = [];
-        logBuf = '';
-        serialLogEl.textContent = '';
-      });
+      window.addEventListener('pagehide', () => api.save());
 
-      document.getElementById('btn-shot').addEventListener('click', () => {
-        const a = document.createElement('a');
-        a.download = `crystal-garden-w${api ? api.getWave() : 1}.png`;
-        a.href = canvas.toDataURL('image/png');
-        a.click();
-      });
+      const STEP_MS = 1000 / 60;
+      let lastT = performance.now();
+      let accum = 0;
+      let frameIdx = 0;
 
-      document.querySelectorAll('[data-speed]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          speedMult = Number(btn.dataset.speed);
-          document.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('active', b === btn));
-        });
-      });
+      function animate(now) {
+        requestAnimationFrame(animate);
 
-      document.querySelectorAll('[data-cmd]').forEach((btn) => {
-        btn.addEventListener('click', () => sendCmd(btn.dataset.cmd));
-      });
+        const dtMs = Math.min(100, now - lastT);
+        lastT = now;
 
-      document.getElementById('act-pet').addEventListener('click', () => {
-        if (api) api.triggerPet();
-      });
-
-      document.getElementById('act-hardreset').addEventListener('click', () => {
-        if (confirm('メタ進行を含むセーブデータを初期化して Run #1 から始めますか？')) {
-          sendCmd('hardreset');
-        }
-      });
-
-      serialForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const v = serialInput.value.trim();
-        if (!v) return;
-        cmdHistory.push(v);
-        cmdHistIdx = cmdHistory.length;
-        sendCmd(v);
-        serialInput.value = '';
-      });
-
-      serialInput.addEventListener('keydown', (e) => {
-        if (e.key === 'ArrowUp' && cmdHistory.length > 0) {
-          e.preventDefault();
-          cmdHistIdx = Math.max(0, cmdHistIdx - 1);
-          serialInput.value = cmdHistory[cmdHistIdx];
-        } else if (e.key === 'ArrowDown' && cmdHistory.length > 0) {
-          e.preventDefault();
-          cmdHistIdx = Math.min(cmdHistory.length, cmdHistIdx + 1);
-          serialInput.value = cmdHistory[cmdHistIdx] || '';
-        }
-      });
-
-      function clientToLcd(ev) {
-        const rect = canvas.getBoundingClientRect();
-        const x = Math.round(((ev.clientX - rect.left) / rect.width) * 480);
-        const y = Math.round(((ev.clientY - rect.top) / rect.height) * 480);
-        return [Math.max(0, Math.min(479, x)), Math.max(0, Math.min(479, y))];
-      }
-
-      let activePointerId = null;
-      canvas.addEventListener('pointerdown', (ev) => {
-        if (!api) return;
-        if (activePointerId !== null) return;
-        activePointerId = ev.pointerId;
-        canvas.setPointerCapture(ev.pointerId);
-        const [x, y] = clientToLcd(ev);
-        api.pointerDown(x, y);
-      });
-
-      canvas.addEventListener('pointermove', (ev) => {
-        if (!api || ev.pointerId !== activePointerId) return;
-        const [x, y] = clientToLcd(ev);
-        api.pointerMove(x, y);
-      });
-
-      function endPointer(ev) {
-        if (!api || ev.pointerId !== activePointerId) return;
-        activePointerId = null;
-        const [x, y] = clientToLcd(ev);
-        api.pointerUp(x, y);
-      }
-      canvas.addEventListener('pointerup', endPointer);
-      canvas.addEventListener('pointercancel', endPointer);
-
-      window.addEventListener('pagehide', () => {
-        if (api) api.save();
-      });
-
-      const params = new URLSearchParams(location.search);
-      if (params.get('zen') === '1') {
-        stageEl.classList.add('zen');
-        const zb = document.getElementById('btn-zen');
-        zb.classList.add('active');
-        zb.textContent = '🛠 パネル表示';
-      }
-
-      createCrystalGarden().then((Module) => {
-        mod = Module;
-        api = {
-          init: Module.cwrap('emu_init', null, []),
-          step: Module.cwrap('emu_step', null, ['number']),
-          render: Module.cwrap('emu_render', null, []),
-          getRgbaPtr: Module.cwrap('emu_get_rgba_ptr', 'number', []),
-          pointerDown: Module.cwrap('emu_pointer_down', null, ['number', 'number']),
-          pointerMove: Module.cwrap('emu_pointer_move', null, ['number', 'number']),
-          pointerUp: Module.cwrap('emu_pointer_up', null, ['number', 'number']),
-          triggerPet: Module.cwrap('emu_trigger_pet', null, []),
-          sendCommand: Module.cwrap('emu_send_command', null, ['string']),
-          save: Module.cwrap('emu_save', null, []),
-          getWave: Module.cwrap('emu_get_wave', 'number', []),
-          getRun: Module.cwrap('emu_get_run', 'number', []),
-        };
-
-        api.init();
-        const initCmd = params.get('cmd');
-        if (initCmd) {
-          initCmd.split(';').forEach((c) => sendCmd(c));
+        accum += dtMs * speedMult;
+        let steps = 0;
+        const maxSteps = speedMult >= 2 ? 4 : 2;
+        while (accum >= STEP_MS && steps < maxSteps) {
           api.step(1 / 60);
+          accum -= STEP_MS;
+          steps++;
+        }
+        if (steps > 0) {
           api.render();
-        }
-        const imgData = ctx.createImageData(480, 480);
-
-        function blit() {
-          const ptr = api.getRgbaPtr();
-          imgData.data.set(Module.HEAPU8.subarray(ptr, ptr + 480 * 480 * 4));
-          ctx.putImageData(imgData, 0, 0);
+          blitLcd((frameIdx++ % 10) === 0);
         }
 
-        blit();
-        loadingEl.classList.add('hidden');
+        // Subtle status LED heartbeat on PCB
+        const pulse = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(now * 0.006));
+        actLedMat.color.setRGB(0.18 * pulse, 0.85 * pulse, 1.0 * pulse);
 
-        const STEP_MS = 1000 / 60;
-        let lastT = performance.now();
-        let accum = 0;
-        let fpsFrames = 0;
-        let fpsT0 = lastT;
-
-        function tick(now) {
-          const dtMs = Math.min(100, now - lastT);
-          lastT = now;
-
-          if (speedMult > 0) {
-            accum += dtMs * speedMult;
-            let steps = 0;
-            const maxSteps = speedMult >= 2 ? 4 : 2;
-            while (accum >= STEP_MS && steps < maxSteps) {
-              api.step(1 / 60);
-              accum -= STEP_MS;
-              steps++;
-            }
-            if (steps > 0) {
-              api.render();
-              blit();
-              fpsFrames++;
-            }
-          }
-
-          if (now - fpsT0 >= 500) {
-            const fps = Math.round((fpsFrames * 1000) / (now - fpsT0));
-            statFps.textContent = speedMult === 0 ? 'PAUSE' : String(fps);
-            statWave.textContent = `RUN #${api.getRun()} · WAVE ${api.getWave()}/50`;
-            fpsFrames = 0;
-            fpsT0 = now;
-          }
-
-          requestAnimationFrame(tick);
+        // Smooth camera transition
+        if (camAnim) {
+          const u = Math.min(1, (now - camAnim.t0) / camAnim.dur);
+          const ease = 1 - Math.pow(1 - u, 3);
+          camera.position.lerpVectors(camAnim.p0, camAnim.p1, ease);
+          controls.target.lerpVectors(camAnim.tStart, camAnim.tEnd, ease);
+          if (u >= 1) camAnim = null;
         }
 
-        requestAnimationFrame(tick);
-      }).catch((err) => {
-        console.error(err);
-        loadingMsg.textContent = 'Failed to load WASM: ' + err.message;
-      });
-    })();
+        controls.update();
+        renderer.render(scene, camera);
+      }
+
+      requestAnimationFrame(animate);
+    });
   </script>
 </body>
 </html>
