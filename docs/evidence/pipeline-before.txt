@@ -1,0 +1,3 @@
+[beat] fps=22 wave=1 crystals=72.9K lumiHP=100 rage=2/2/2
+[prof] render=14965us fps=22 | int_free=4049592 int_max=204788 psram_free=3778696
+[pipeline] sync=149 present=29456 total=44661 cpu=240MHz

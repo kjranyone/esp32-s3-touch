@@ -1,0 +1,3 @@
+[beat] fps=62 wave=2 crystals=45.3M lumiHP=260 rage=0/26/2
+[prof] render=7928us fps=62 | int_free=3298756 int_max=102388 psram_free=3133544
+[pipeline] battle=6909(rstr=374 draw=6522) hud=1015 panel=3 sync=236 present=67 wait=654 total=9708 cpu=240MHz

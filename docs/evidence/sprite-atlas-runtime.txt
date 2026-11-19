@@ -1,0 +1,2 @@
+[beat] fps=24 wave=1 crystals=72.1K lumiHP=100 rage=2/2/2
+[prof] render=13747us fps=24 | int_free=4049616 int_max=204788 psram_free=3778696

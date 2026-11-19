@@ -1,0 +1,86 @@
+[
+  {
+    "name": "lumi",
+    "frames": 36,
+    "size": 96,
+    "crop": [
+      0,
+      8,
+      209,
+      199
+    ],
+    "bytes": 339086
+  },
+  {
+    "name": "mira",
+    "frames": 36,
+    "size": 96,
+    "crop": [
+      1,
+      7,
+      209,
+      200
+    ],
+    "bytes": 406448
+  },
+  {
+    "name": "goro",
+    "frames": 36,
+    "size": 96,
+    "crop": [
+      2,
+      11,
+      203,
+      191
+    ],
+    "bytes": 324310
+  },
+  {
+    "name": "slime",
+    "frames": 36,
+    "size": 64,
+    "crop": [
+      0,
+      23,
+      209,
+      192
+    ],
+    "bytes": 114200
+  },
+  {
+    "name": "bat",
+    "frames": 36,
+    "size": 64,
+    "crop": [
+      16,
+      25,
+      202,
+      197
+    ],
+    "bytes": 124550
+  },
+  {
+    "name": "golem",
+    "frames": 36,
+    "size": 96,
+    "crop": [
+      5,
+      14,
+      207,
+      189
+    ],
+    "bytes": 360106
+  },
+  {
+    "name": "boss",
+    "frames": 36,
+    "size": 128,
+    "crop": [
+      7,
+      11,
+      207,
+      189
+    ],
+    "bytes": 728922
+  }
+]

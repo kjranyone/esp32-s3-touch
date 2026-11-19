@@ -1,0 +1,7 @@
+[game] hard reset (Run #1)
+[beat] fps=49 run=1 wave=1/50 party=1 crystals=28 hp0=80/92 rage=100/0/0
+[prof] render=12971us fps=49 | int_free=3275936 int_max=104436 psram_free=3107592
+[pipeline] battle=11524(rstr=1367 draw=10187) hud=1436 panel=10 sync=230 present=55 wait=3636 total=17789 cpu=240MHz
+[beat] fps=49 run=1 wave=3/50 party=1 crystals=156 hp0=87/92 rage=32/0/0
+[prof] render=14935us fps=49 | int_free=3275720 int_max=104436 psram_free=3107592
+[pipeline] battle=13776(rstr=551 draw=13217) hud=1150 panel=9 sync=235 present=62 wait=2725 total=18867 cpu=240MHz
