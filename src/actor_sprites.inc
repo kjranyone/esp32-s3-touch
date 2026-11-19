@@ -378,18 +378,18 @@ static inline void blit_span_band(uint16_t* band, int by, int bh,
 static int sprite_frame(const Actor& a)
 {
     uint8_t ba = a.ally ? a.base_atlas : a.base_atlas;
-    int windup = a.windup_f ? (int)a.windup_f : (a.ally ? 6 : (ba == 3 ? 16 : (ba == 2 ? 20 : 14)));
-    int recover = a.recover_f ? (int)a.recover_f : (a.ally ? 7 : (ba == 3 ? 16 : 18));
+    int windup  = a.ally ? ((int)a.windup_f + 2 < 5 ? 5 : (int)a.windup_f + 2)
+                         : (a.windup_f ? (int)a.windup_f : (ba == 3 ? 16 : (ba == 2 ? 20 : 14)));
+    int recover = a.ally ? ((int)a.recover_f + 4 < 8 ? 8 : (int)a.recover_f + 4)
+                         : (a.recover_f ? (int)a.recover_f : (ba == 3 ? 16 : 18));
 
-    if (a.state == A_IDLE) return (motion_tick / 7) % 4;
-    if (a.state == A_WALK) {
-        int div = (fabsf(a.vx) + fabsf(a.vy) >= 2.4f) ? 2 : 3;
-        return 4 + (motion_tick / div) % 8;
-    }
+    int ph = (int)a.anim_phase;
+    if (a.state == A_IDLE) return ph & 3;
+    if (a.state == A_WALK) return 4 + (ph & 7);
     if (a.state == A_VICTORY) {
-        if (a.ally && ba == 0) return ((motion_tick / 6) % 2) ? 27 : 26;
-        if (a.ally && ba == 1) return ((motion_tick / 7) % 2) ? 31 : 30;
-        if (a.ally && ba == 2) return ((motion_tick / 8) % 2) ? 16 : 15;
+        if (a.ally && ba == 0) return (ph & 1) ? 27 : 26;
+        if (a.ally && ba == 1) return (ph & 1) ? 31 : 30;
+        if (a.ally && ba == 2) return (ph & 1) ? 16 : 15;
         return 0;
     }
 
@@ -397,16 +397,17 @@ static int sprite_frame(const Actor& a)
         uint8_t c = a.active_combo % 3;
         switch (a.state) {
         case A_WINDUP: {
-            int elapsed = windup - (int)a.timer;
-            if (c == 0) return (elapsed <= 1) ? 12 : (elapsed <= 2 ? 13 : 14);
-            if (c == 1) return (elapsed <= 1) ? 18 : (elapsed <= 2 ? 19 : 20);
-            return (elapsed <= 1) ? 25 : (elapsed <= 2 ? 26 : 27);
+            int p = (windup - (int)a.timer) * 3 / (windup > 0 ? windup : 1);
+            if (p < 0) p = 0; if (p > 2) p = 2;
+            if (c == 0) return 12 + p;
+            if (c == 1) return 18 + p;
+            return 25 + p;
         }
         case A_STRIKE:
             return (c == 0) ? 15 : (c == 1 ? 21 : 28);
         case A_RECOVER: {
             int p = (recover - (int)a.timer) * 2 / (recover > 0 ? recover : 1);
-            if (p > 1) p = 1;
+            if (p < 0) p = 0; if (p > 1) p = 1;
             if (c == 0) return 16 + p;
             if (c == 1) return 22 + p;
             return 29;
@@ -587,23 +588,17 @@ static const uint16_t* ensure_actor_pose(const Actor& a, int slot_idx, uint32_t&
     return flash_run;
 }
 
-/* Compute active squash & stretch Q8 scale (256 = 1.0x) (#120).
-   Keeps sx_q8 == 256 for windup/strike and tail decay so blit_span_band stays on the memcpy fast path. */
+/* Smooth continuous squash & stretch Q8 scale (256 = 1.0x), zero abrupt snapping */
 static void actor_squash(const Actor& a, int& sx_q8, int& sy_q8)
 {
     sx_q8 = 256; sy_q8 = 256;
-    if (a.squash_t == 0) {
-        if (a.state == A_WINDUP) sy_q8 = 242;
-        else if (a.state == A_STRIKE) sy_q8 = 266;
-        return;
-    }
-    int amp = a.squash_t * 5;
-    if (amp > 42) amp = 42;
-    bool horiz = (a.squash_t >= 4);
+    if (a.squash_t == 0) return;
+    int amp = a.squash_t * 4;
+    if (amp > 28) amp = 28;
     switch (a.squash_kind) {
-    case 1: sx_q8 = horiz ? (256 - (amp * 3) / 4) : 256; sy_q8 = 256 + amp; break;
-    case 2: sx_q8 = horiz ? (256 + amp) : 256; sy_q8 = 256 - (amp * 3) / 4; break;
-    case 3: sx_q8 = horiz ? (256 - amp / 2) : 256; sy_q8 = 256 + (amp * 3) / 4; break;
+    case 1: sx_q8 = 256 - (amp * 3) / 5; sy_q8 = 256 + amp; break;
+    case 2: sx_q8 = 256 + (amp * 3) / 4; sy_q8 = 256 - (amp * 3) / 5; break;
+    case 3: sx_q8 = 256 - amp / 2;       sy_q8 = 256 + (amp * 3) / 5; break;
     default: break;
     }
 }

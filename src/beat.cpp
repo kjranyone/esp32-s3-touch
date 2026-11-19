@@ -319,6 +319,12 @@ struct Actor {
     uint8_t dot_cd = 0;          /* DoT ティックカウンタ */
     uint8_t boss_phase_mask = 0; /* bit0=50%, bit1=30%, bit2=10% */
     uint8_t phase_armor_t = 0;   /* ボスPhase切替咆哮アーマー */
+
+    /* 滑らかなアニメーション制御 (連続位相・ターゲット維持・クールダウン) */
+    float   anim_phase = 0.0f;
+    uint8_t atk_cd = 0;
+    uint8_t hop_cd = 0;
+    int8_t  lock_target = -1;
 };
 
 static Actor allies[ALLY_N];
@@ -581,6 +587,7 @@ void sync_party(bool reset_pos)
             a.dir = 1;
             a.hpmax = new_hpmax;
             a.hp = new_hpmax;
+            a.anim_phase = (float)i * 2.3f;
             a.rage = (float)game::st.mods.start_mp;
             if (a.rage > 100.0f) a.rage = 100.0f;
         } else {
@@ -1400,6 +1407,8 @@ static Actor* spawn_enemy(int type, float x_hint, float y_hint = -1.0f, uint8_t 
     e->hpmax = hpmax; e->hp = hpmax;
     e->dir = (sx > cam_x + FB_W * 0.5f) ? -1 : 1;
     e->state = A_WALK;
+    e->anim_phase = frand(0.0f, 8.0f);
+    e->hop_cd = (uint8_t)(24 + (rnd() % 28));
     e->spawn_t = (type == E_BOSS) ? 0 : 14;
     if (type == E_BOSS) boss_hp_trail = hpmax;
     return e;
@@ -2012,19 +2021,32 @@ static Actor* lowest_hp_ally()
     return best;
 }
 
-static Actor* pick_ally_target(const Actor& a)
+static Actor* pick_ally_target(Actor& a)
 {
-    Actor* best = nullptr;
+    /* 現在のロック対象が生存していれば、大幅に有利な別対象がいない限り維持 (左右バタつき防止) */
+    Actor* locked = nullptr;
+    float locked_score = 1e9f;
+    if (a.lock_target >= 0 && a.lock_target < ENEMY_N && enemies[a.lock_target].alive) {
+        locked = &enemies[a.lock_target];
+        locked_score = fabsf(locked->x - a.x) + fabsf(locked->y - a.y) * 0.6f;
+        if (a.type == game::STYLE_HEAVY_SLAM && (locked->type == E_BOSS || locked->type == E_GOLEM)) locked_score -= 90.0f;
+        if (a.type == game::STYLE_COMBO_BLADE && locked->z > 8.0f) locked_score -= 50.0f;
+    }
+
+    int best_idx = -1;
     float best_score = 1e9f;
-    for (auto& e : enemies) {
+    for (int i = 0; i < ENEMY_N; ++i) {
+        Actor& e = enemies[i];
         if (!e.alive) continue;
-        float d = fabsf(e.x - a.x) + fabsf(e.y - a.y) * 0.6f;
-        float score = d;
+        float score = fabsf(e.x - a.x) + fabsf(e.y - a.y) * 0.6f;
         if (a.type == game::STYLE_HEAVY_SLAM && (e.type == E_BOSS || e.type == E_GOLEM)) score -= 90.0f;
         if (a.type == game::STYLE_COMBO_BLADE && e.z > 8.0f) score -= 50.0f;
-        if (score < best_score) { best_score = score; best = &e; }
+        if (score < best_score) { best_score = score; best_idx = i; }
     }
-    return best;
+    if (best_idx < 0) { a.lock_target = -1; return nullptr; }
+    if (locked && locked_score <= best_score + 48.0f) return locked;
+    a.lock_target = (int8_t)best_idx;
+    return &enemies[best_idx];
 }
 
 static void start_ally_attack(Actor& a)
@@ -2035,10 +2057,10 @@ static void start_ally_attack(Actor& a)
     if (game::TALENTS[a.talent_id].trait == game::TRAIT_HASTE) spd_m *= 1.18f;
     if (a.haste_t > 0) spd_m *= 1.25f;
     if (a.slow_t > 0) spd_m *= 0.72f;
-    int wf = (int)roundf((float)a.windup_f / fmaxf(0.65f, fminf(1.8f, spd_m)));
-    if (wf < 2) wf = 2;
+    /* 視認できる予備動作 (最小 5f = 83ms) を確保しバタつきを抑える */
+    int wf = (int)roundf((float)(a.windup_f + 2) / fmaxf(0.65f, fminf(1.55f, spd_m)));
+    if (wf < 5) wf = 5;
     a.timer = (uint16_t)wf;
-    set_squash(a, 2, 3);
 }
 
 static void ally_step(Actor& a, int ally_idx)
@@ -2050,6 +2072,8 @@ static void ally_step(Actor& a, int ally_idx)
     if (a.haste_t > 0) { a.haste_t--; spd *= 1.22f; }
     if (a.slow_t > 0)  { a.slow_t--; spd *= 0.68f; }
     if (a.ai_cd > 0) a.ai_cd--;
+    if (a.atk_cd > 0) a.atk_cd--;
+    if (a.hop_cd > 0) a.hop_cd--;
 
     constexpr float ALLY_MIN_X = 24.0f;
     constexpr float ALLY_MAX_X = STAGE_W - 24.0f;
@@ -2107,8 +2131,8 @@ static void ally_step(Actor& a, int ally_idx)
         return;
     }
 
-    /* 有効単発ダメージ算出 */
-    float dmg_mult = (game::st.mods.dmg_pct / 100.0f) * (gp::g.dmg_pct / 100.0f) * (float)game::pet_mult();
+    /* 有効単発ダメージ算出 (モーション間合い調整分の単発重み補正 +16%) */
+    float dmg_mult = (game::st.mods.dmg_pct / 100.0f) * (gp::g.dmg_pct / 100.0f) * (float)game::pet_mult() * 1.16f;
     if (td.trait == game::TRAIT_BERSERK && a.hp < a.hpmax * 0.50f) dmg_mult *= 1.35f;
     if (game::st.mods.berserk_pct > 0 && a.hp < a.hpmax * 0.50f) dmg_mult *= (1.0f + game::st.mods.berserk_pct / 100.0f);
     float unit_dmg = td.dmg * rm * dmg_mult;
@@ -2297,8 +2321,8 @@ static void ally_step(Actor& a, int ally_idx)
                 add_shake(2, 5);
             }
             a.state = A_STRIKE;
-            a.timer = td.strike;
-            set_squash(a, 2, 3);
+            a.timer = (uint16_t)(td.strike + 1 < 6 ? 6 : td.strike + 1);
+            set_squash(a, 2, 2);
         }
         return;
     }
@@ -2310,13 +2334,19 @@ static void ally_step(Actor& a, int ally_idx)
                 Actor* nt = nearest_enemy(a.x, a.y);
                 if (nt && fabsf(nt->x - a.x) < td.reach + 32 && fabsf(nt->y - a.y) < 28) {
                     a.dir = (nt->x >= a.x) ? 1 : -1;
-                    a.vx = a.dir * 2.8f; a.vy = (nt->y - a.y) * 0.14f;
+                    a.vx = a.dir * 2.4f; a.vy = (nt->y - a.y) * 0.12f;
                     start_ally_attack(a);
                     return;
                 }
             }
             a.state = A_RECOVER;
-            a.timer = (uint16_t)((ranged_style && a.combo != 0) ? (a.recover_f / 2) : a.recover_f);
+            uint16_t rec = (uint16_t)((ranged_style && a.combo != 0) ? (a.recover_f + 2) : (a.recover_f + 4));
+            if (rec < 8) rec = 8;
+            a.timer = rec;
+            if (a.combo == 0) {
+                /* 3段コンボ完走後・一拍の残心 (バタつき防止の自然なリズム) */
+                a.atk_cd = (uint8_t)(ranged_style ? 10 : 12);
+            }
         }
         return;
     }
@@ -2375,43 +2405,52 @@ static void ally_step(Actor& a, int ally_idx)
     float dx_tgt = t->x - a.x;
     float adx = fabsf(dx_tgt), ady = fabsf(t->y - a.y);
     int8_t want_dir = (dx_tgt >= 0.0f) ? 1 : -1;
-    if (want_dir != a.dir) {
+    if (want_dir != a.dir && adx > 14.0f) {
         if (a.think_cd > 0) a.think_cd--;
-        else { a.dir = want_dir; a.think_cd = (uint8_t)(4 + (rnd() % 5)); }
+        else { a.dir = want_dir; a.think_cd = 14; }
     }
 
-    if (ranged_style && adx < 72.0f && ady < 32.0f) {
-        a.dir = want_dir;
-        a.vx += (-a.dir * spd * 1.9f - a.vx) * 0.35f;
-        a.vy += ((a.y < (BELT_Y0 + BELT_Y1) * 0.5f ? 1.0f : -1.0f) * spd * 1.15f - a.vy) * 0.35f;
-        if (a.z <= 0.0f && (rnd() % 100) < 22) {
-            a.z = 1.0f; a.vz = 4.0f; set_squash(a, 1, 5);
+    if (ranged_style && adx < 68.0f && ady < 32.0f) {
+        if (adx > 14.0f) a.dir = want_dir;
+        a.vx += (-a.dir * spd * 1.55f - a.vx) * 0.25f;
+        a.vy += ((a.y < (BELT_Y0 + BELT_Y1) * 0.5f ? 1.0f : -1.0f) * spd * 0.95f - a.vy) * 0.25f;
+        if (a.z <= 0.0f && a.hop_cd == 0 && (rnd() % 100) < 12) {
+            a.z = 1.0f; a.vz = 3.8f; a.hop_cd = 75; set_squash(a, 1, 4);
             spawn_vfx_sprite(a.x, a.y - 2, 0.0f, vfx_sprites::FXS_DUST_0, 3, 2, a.dir, 0, 1);
         }
-        integrate_vel(a, ALLY_MIN_X, ALLY_MAX_X, 0.95f);
+        integrate_vel(a, ALLY_MIN_X, ALLY_MAX_X, 0.94f);
         a.state = A_WALK;
-    } else if (!ranged_style && a.z <= 0.0f && adx > td.reach + 10.0f && adx < td.reach + 62.0f && ady < 24.0f && (rnd() % 100) < 24) {
+    } else if (!ranged_style && a.z <= 0.0f && a.hop_cd == 0 && a.atk_cd == 0 &&
+               adx > td.reach + 18.0f && adx < td.reach + 64.0f && ady < 22.0f && (rnd() % 100) < 12) {
         a.dir = want_dir;
-        a.z = 2.0f; a.vz = 5.4f; a.vx = a.dir * spd * 2.0f; a.vy = (t->y - a.y) * 0.12f; a.air_combo = 0;
-        set_squash(a, 1, 5);
+        a.z = 2.0f; a.vz = 5.0f; a.vx = a.dir * spd * 1.75f; a.vy = (t->y - a.y) * 0.10f; a.air_combo = 0;
+        a.hop_cd = 85;
+        set_squash(a, 1, 4);
         spawn_vfx_sprite(a.x - a.dir * 8, a.y - 2, 0.0f, vfx_sprites::FXS_DUST_0, 3, 2, -a.dir, 0, 1);
         start_ally_attack(a);
-    } else if (adx > td.reach || (!ranged_style && ady > 18.0f)) {
+    } else if (adx > td.reach || (!ranged_style && ady > 20.0f)) {
         float mx = ideal_x - a.x, my = ideal_y - a.y;
-        bool dashing = (fabsf(mx) > 48.0f);
-        float dash_mult = dashing ? 1.80f : 1.0f;
-        float tvx = (fabsf(mx) > 4.0f) ? ((mx > 0 ? 1 : -1) * spd * dash_mult) : 0.0f;
-        float tvy = (fabsf(my) > 4.0f) ? ((my > 0 ? 1 : -1) * spd * (dashing ? 1.15f : 0.85f)) : 0.0f;
-        a.vx += (tvx - a.vx) * 0.28f; a.vy += (tvy - a.vy) * 0.28f;
-        integrate_vel(a, ALLY_MIN_X, ALLY_MAX_X, 0.96f);
-        a.state = A_WALK;
-        if (dashing && motion_tick % 7 == 0)
+        bool dashing = (fabsf(mx) > 64.0f);
+        float dash_mult = dashing ? 1.55f : 1.0f;
+        float tvx = (fabsf(mx) > 10.0f) ? ((mx > 0 ? 1 : -1) * spd * dash_mult) : 0.0f;
+        float tvy = (fabsf(my) > 8.0f)  ? ((my > 0 ? 1 : -1) * spd * (dashing ? 1.05f : 0.80f)) : 0.0f;
+        a.vx += (tvx - a.vx) * 0.22f; a.vy += (tvy - a.vy) * 0.22f;
+        integrate_vel(a, ALLY_MIN_X, ALLY_MAX_X, 0.94f);
+        a.state = (fabsf(a.vx) + fabsf(a.vy) > 0.35f) ? A_WALK : A_IDLE;
+        if (dashing && motion_tick % 10 == 0)
             spawn_vfx_sprite(a.x - a.dir * 8, a.y - 2, a.z, vfx_sprites::FXS_DUST_0, 3, 2, -a.dir, 0, 1, false, 192);
+    } else if (a.atk_cd > 0) {
+        /* 残心待機: 攻撃間隔中は落ち着いた構え (IDLE) で減速 */
+        a.vx *= 0.78f; a.vy *= 0.78f;
+        integrate_vel(a, ALLY_MIN_X, ALLY_MAX_X, 0.90f);
+        a.state = A_IDLE;
     } else {
-        a.dir = want_dir;
+        if (adx > 10.0f) a.dir = want_dir;
         if (!ranged_style) {
-            a.vx = a.dir * 2.4f;
-            if (t->z > 14.0f && a.z <= 0.0f) { a.z = 2.0f; a.vz = 5.4f; a.air_combo = 0; set_squash(a, 1, 5); }
+            a.vx = a.dir * 1.9f;
+            if (t->z > 16.0f && a.z <= 0.0f && a.hop_cd == 0) {
+                a.z = 2.0f; a.vz = 5.0f; a.air_combo = 0; a.hop_cd = 60; set_squash(a, 1, 4);
+            }
         }
         start_ally_attack(a);
     }
@@ -2419,21 +2458,31 @@ static void ally_step(Actor& a, int ally_idx)
 }
 
 /* ---------------- 敵 AI & ボス 50% / 30% / 10% しきい値アクション ---------------- */
-static Actor* pick_enemy_target(const Actor& e)
+static Actor* pick_enemy_target(Actor& e)
 {
-    /* Snipers & Blood Divers 優先でHP低い味方や後衛を狙い嫌がらせ */
+    /* 毎フレームのランダム標的切替による左右フリップ振動を防ぐため、45f 単位で標的を維持 */
+    if (e.lock_target >= 0 && e.lock_target < ALLY_N &&
+        allies[e.lock_target].alive && allies[e.lock_target].state != A_DOWN &&
+        e.think_cd > 0) {
+        return &allies[e.lock_target];
+    }
+    e.think_cd = 45;
     if ((e.type == E_BAT) && ((rnd() % 100) < 60)) {
         Actor* low = lowest_hp_ally();
-        if (low) return low;
+        if (low) {
+            e.lock_target = (int8_t)(low - allies);
+            return low;
+        }
     }
-    Actor* best = nullptr;
+    int best_i = -1;
     float bd = 1e9f;
-    for (auto& a : allies) {
-        if (!a.alive || a.state == A_DOWN) continue;
-        float d = fabsf(a.x - e.x) + fabsf(a.y - e.y) * 0.5f;
-        if (d < bd) { bd = d; best = &a; }
+    for (int i = 0; i < ALLY_N; ++i) {
+        if (!allies[i].alive || allies[i].state == A_DOWN) continue;
+        float d = fabsf(allies[i].x - e.x) + fabsf(allies[i].y - e.y) * 0.5f;
+        if (d < bd) { bd = d; best_i = i; }
     }
-    return best;
+    e.lock_target = (int8_t)best_i;
+    return (best_i >= 0) ? &allies[best_i] : nullptr;
 }
 
 static void spawn_telegraph_ring(float x, float y, float rx, float ry, int16_t frames)
@@ -2571,6 +2620,8 @@ static void enemy_step(Actor& e)
     constexpr float ENEMY_MIN_X = 20.0f;
     constexpr float ENEMY_MAX_X = STAGE_W - 20.0f;
     if (e.ai_cd > 0) e.ai_cd--;
+    if (e.think_cd > 0) e.think_cd--;
+    if (e.hop_cd > 0) e.hop_cd--;
     if (e.guard_t > 0) e.guard_t--;
     if (e.phase_armor_t > 0) e.phase_armor_t--;
     if (e.slow_t > 0) e.slow_t--;
@@ -2592,9 +2643,9 @@ static void enemy_step(Actor& e)
     }
 
     if (e.type == E_BAT && e.state == A_WALK) {
-        e.vz *= 0.80f;
-        float hover_z = 14.0f + sinf((motion_tick + e.home_x) * 0.16f) * 5.0f;
-        e.z += (hover_z - e.z) * 0.2f;
+        e.vz *= 0.82f;
+        float hover_z = 14.0f + sinf((motion_tick + e.home_x) * 0.08f) * 4.5f;
+        e.z += (hover_z - e.z) * 0.14f;
     }
 
     if (e.state == A_HURT) {
@@ -2751,18 +2802,18 @@ static void enemy_step(Actor& e)
     if (e.slow_t > 0) sp *= 0.65f;
 
     if (fabsf(dx) > reach || (reach < 80.0f && fabsf(dy) > 18.0f)) {
-        if (e.type == E_SLIME) {
-            uint8_t hop = (motion_tick + (uint8_t)e.x) % 24;
-            if (hop == 4 && e.z <= 0.0f) { e.z = 1.0f; e.vz = 2.4f; set_squash(e, 1, 3); }
+        if (e.type == E_SLIME && e.z <= 0.0f && e.hop_cd == 0) {
+            e.z = 1.0f; e.vz = 2.4f; e.hop_cd = (uint8_t)(42 + (rnd() % 20));
+            set_squash(e, 1, 3);
         }
-        e.dir = dx >= 0 ? 1 : -1;
-        float tvx = (fabsf(dx) > reach * 0.7f) ? (e.dir * sp) : 0.0f;
-        float tvy = (fabsf(dy) > 4.0f) ? ((dy > 0 ? 1 : -1) * sp * 0.75f) : 0.0f;
-        e.vx += (tvx - e.vx) * 0.25f; e.vy += (tvy - e.vy) * 0.25f;
-        integrate_vel(e, ENEMY_MIN_X, ENEMY_MAX_X, 0.96f, enemy_gravity(e));
+        if (fabsf(dx) > 12.0f) e.dir = dx >= 0 ? 1 : -1;
+        float tvx = (fabsf(dx) > reach * 0.75f) ? ((dx >= 0 ? 1 : -1) * sp) : 0.0f;
+        float tvy = (fabsf(dy) > 6.0f) ? ((dy > 0 ? 1 : -1) * sp * 0.72f) : 0.0f;
+        e.vx += (tvx - e.vx) * 0.20f; e.vy += (tvy - e.vy) * 0.20f;
+        integrate_vel(e, ENEMY_MIN_X, ENEMY_MAX_X, 0.94f, enemy_gravity(e));
     } else {
         integrate_vel(e, ENEMY_MIN_X, ENEMY_MAX_X, 0.82f, enemy_gravity(e));
-        e.dir = dx >= 0 ? 1 : -1;
+        if (fabsf(dx) > 10.0f) e.dir = dx >= 0 ? 1 : -1;
         if ((e.type == E_BOSS || (e.type == E_GOLEM && e.sub_kind == 1)) && e.ai_cd == 0 && ((rnd() % 100) < (e.type == E_BOSS ? 45 : 35))) {
             e.state = A_SPECIAL;
             e.timer = 44;
@@ -2897,6 +2948,34 @@ static void fx_step()
 }
 
 /* ---------------- ゲームステップ ---------------- */
+static void advance_actor_anim(Actor& a)
+{
+    if (!a.alive) return;
+    float inc = 0.0f;
+    if (a.state == A_IDLE) {
+        inc = 0.095f; /* ~5.7 sprite-fps: 落ち着いた呼吸 */
+    } else if (a.state == A_WALK) {
+        if (dir_mode == DIR_TITLE) {
+            inc = 0.145f; /* ~8.7 sprite-fps: 優雅な庭園散歩 */
+        } else if (dir_mode == DIR_TRAVEL) {
+            inc = 0.21f;  /* ~12.6 sprite-fps: テンポ良い行軍 */
+        } else {
+            float sp = hypotf(a.vx, a.vy);
+            if (!a.ally && (a.type == E_GOLEM || a.type == E_BOSS)) {
+                inc = 0.085f + sp * 0.030f;
+                if (inc > 0.145f) inc = 0.145f;
+            } else {
+                inc = 0.115f + sp * 0.035f;
+                if (inc > 0.22f) inc = 0.22f; /* 最大 13.2 sprite-fps, 絶対にコマ飛びしない */
+            }
+        }
+    } else if (a.state == A_VICTORY) {
+        inc = 0.10f;
+    }
+    a.anim_phase += inc;
+    if (a.anim_phase >= 256.0f) a.anim_phase -= 256.0f;
+}
+
 void step()
 {
     frame++;
@@ -2907,11 +2986,17 @@ void step()
     if (phase_banner_t > 0) phase_banner_t--;
 
     motion_tick++;
-    for (auto& a : allies) { if (a.flash) --a.flash; if (a.hit_vib_t) --a.hit_vib_t; if (a.squash_t) --a.squash_t; }
+    for (auto& a : allies) {
+        if (a.flash) --a.flash;
+        if (a.hit_vib_t) --a.hit_vib_t;
+        if (a.squash_t) --a.squash_t;
+        advance_actor_anim(a);
+    }
     for (auto& e : enemies) {
         if (e.flash) --e.flash;
         if (e.hit_vib_t) --e.hit_vib_t;
         if (e.squash_t) --e.squash_t;
+        advance_actor_anim(e);
         if (!e.alive && e.state == A_DOWN && e.timer) --e.timer;
     }
 
@@ -3275,9 +3360,11 @@ void step()
             float target_cam = focus_x - FB_W * 0.45f;
             if (target_cam < 0.0f) target_cam = 0.0f; if (target_cam > STAGE_W - FB_W) target_cam = STAGE_W - FB_W;
             float diff = target_cam - cam_x;
-            if (fabsf(diff) > 16.0f) {
-                float step_px = (diff > 0.0f) ? fminf(diff, 6.0f) : fmaxf(diff, -6.0f);
-                cam_x = roundf(cam_x + step_px);
+            if (fabsf(diff) > 10.0f) {
+                float step_px = diff * 0.10f;
+                if (step_px > 4.5f) step_px = 4.5f;
+                if (step_px < -4.5f) step_px = -4.5f;
+                cam_x += step_px;
             }
         }
         if (cam_x > hero->x - 56.0f) cam_x = roundf(hero->x - 56.0f);
