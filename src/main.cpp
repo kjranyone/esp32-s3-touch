@@ -42,6 +42,7 @@ IRAM_ATTR static bool on_refresh_finish(void*)
 /* ---------------- UI & プロファイル状態 ---------------- */
 static bool panel_open = false;
 static bool info_peek = false;
+static bool title_confirm = false;
 static int64_t last_frame_t = 0;
 static uint32_t frame_count = 0;
 static int64_t fps_t0 = 0;
@@ -99,6 +100,7 @@ static void handle_tap(int x, int y)
         if (!panel_open) {
             panel_open = true;
             info_peek = false;
+            title_confirm = false;
             bool opened_box = false;
             if (!game::st.draft_open && game::can_open_box()) {
                 if (game::open_lootbox(false)) {
@@ -110,6 +112,7 @@ static void handle_tap(int x, int y)
         } else {
             panel_open = false;
             info_peek = false;
+            title_confirm = false;
             game::st.swap_talent = -1;
             sfx::play(sfx::SFX_CANCEL);
         }
@@ -125,6 +128,37 @@ static void handle_tap(int x, int y)
     }
 
     if (panel_open) {
+        /* タイトル復帰・ゲームリセット警告ダイアログ表示中 */
+        if (title_confirm) {
+            if (x >= beat::DLG_CANCEL_X && x < beat::DLG_CANCEL_X + beat::DLG_CANCEL_W &&
+                y >= beat::DLG_CANCEL_Y && y < beat::DLG_CANCEL_Y + beat::DLG_CANCEL_H) {
+                title_confirm = false;
+                sfx::play(sfx::SFX_CANCEL);
+                return;
+            }
+            if (x >= beat::DLG_OK_X && x < beat::DLG_OK_X + beat::DLG_OK_W &&
+                y >= beat::DLG_OK_Y && y < beat::DLG_OK_Y + beat::DLG_OK_H) {
+                sfx::play(sfx::SFX_CONFIRM);
+                game::on_run_end(beat::wave(), false);
+                game::start_new_run();
+                beat::sync_party(true);
+                beat::set_wave(1);
+                panel_open = false;
+                info_peek = false;
+                title_confirm = false;
+                game::st.swap_talent = -1;
+                beat::enter_title();
+                return;
+            }
+            /* ダイアログ外 (×ボタン含む) はキャンセル扱い */
+            if (x >= beat::CLOSE_X && x < beat::CLOSE_X + beat::CLOSE_W &&
+                y >= beat::CLOSE_Y && y < beat::CLOSE_Y + beat::CLOSE_H) {
+                title_confirm = false;
+                sfx::play(sfx::SFX_CANCEL);
+            }
+            return;
+        }
+
         /* [X] 閉じる (入れ替え選択中はドラフトへ戻る) */
         if (x >= beat::CLOSE_X && x < beat::CLOSE_X + beat::CLOSE_W &&
             y >= beat::CLOSE_Y && y < beat::CLOSE_Y + beat::CLOSE_H) {
@@ -134,22 +168,19 @@ static void handle_tap(int x, int y)
             } else {
                 panel_open = false;
                 info_peek = false;
+                title_confirm = false;
                 beat::request_full_restore();
             }
             return;
         }
 
-        /* PAUSED / STATUS 画面の [TITLE] ボタン (セーブしてタイトル画面へ戻る) */
+        /* PAUSED / STATUS 画面の [TITLE] ボタン (リセット警告ダイアログを開く) */
         bool on_status_view = (!game::st.draft_open || info_peek) && (game::st.swap_talent < 0);
         if (on_status_view &&
             x >= beat::TITLEBTN_X && x < beat::TITLEBTN_X + beat::TITLEBTN_W &&
             y >= beat::TITLEBTN_Y && y < beat::TITLEBTN_Y + beat::TITLEBTN_H) {
-            sfx::play(sfx::SFX_CONFIRM);
-            game::save();
-            panel_open = false;
-            info_peek = false;
-            game::st.swap_talent = -1;
-            beat::enter_title();
+            title_confirm = true;
+            sfx::play(sfx::SFX_TAP);
             return;
         }
 
@@ -498,7 +529,7 @@ static void frame()
     int64_t t_battle = esp_timer_get_time();
     beat::render_hud(target, render_idx);
     int64_t t_hud = esp_timer_get_time();
-    beat::render_panel(target, panel_open, info_peek, render_idx);
+    beat::render_panel(target, panel_open, info_peek, render_idx, title_confirm);
     int64_t t_panel = esp_timer_get_time();
     prof_render += t_panel - render_start;
     prof_battle += t_battle - render_start;

@@ -447,6 +447,8 @@ int pick_draft(int card_idx, int swap_slot)
             if (st.party[i].active && st.party[i].talent_id == tid) {
                 if (st.party[i].rank < 9) st.party[i].rank++;
                 st.discovered_talents |= (1ULL << tid);
+                st.last_pick_slot = (int8_t)i;
+                st.last_pick_talent = (uint8_t)tid;
                 st.draft_open = false;
                 st.swap_talent = -1;
                 recalc_mods();
@@ -458,6 +460,8 @@ int pick_draft(int card_idx, int swap_slot)
             if (!st.party[i].active) {
                 st.party[i] = {true, (uint8_t)tid, 1};
                 st.discovered_talents |= (1ULL << tid);
+                st.last_pick_slot = (int8_t)i;
+                st.last_pick_talent = (uint8_t)tid;
                 st.draft_open = false;
                 st.swap_talent = -1;
                 recalc_mods();
@@ -468,6 +472,8 @@ int pick_draft(int card_idx, int swap_slot)
         if (swap_slot >= 0 && swap_slot < PARTY_MAX) {
             st.party[swap_slot] = {true, (uint8_t)tid, 1};
             st.discovered_talents |= (1ULL << tid);
+            st.last_pick_slot = (int8_t)swap_slot;
+            st.last_pick_talent = (uint8_t)tid;
             st.draft_open = false;
             st.swap_talent = -1;
             recalc_mods();
@@ -480,6 +486,7 @@ int pick_draft(int card_idx, int swap_slot)
         int cid = dc.id;
         if (cid >= 0 && cid < CHARM_N && st.charm_lv[cid] < CHARMS[cid].max_lv) {
             st.charm_lv[cid]++;
+            st.last_pick_charm = (uint8_t)cid;
         }
         st.draft_open = false;
         st.swap_talent = -1;
@@ -496,6 +503,8 @@ bool debug_grant_talent(int tid, int slot_hint)
         if (st.party[i].active && st.party[i].talent_id == tid) {
             if (st.party[i].rank < 9) st.party[i].rank++;
             st.discovered_talents |= (1ULL << tid);
+            st.last_pick_slot = (int8_t)i;
+            st.last_pick_talent = (uint8_t)tid;
             recalc_mods();
             save();
             return true;
@@ -508,6 +517,8 @@ bool debug_grant_talent(int tid, int slot_hint)
     if (dst < 0) dst = (slot_hint >= 0 && slot_hint < PARTY_MAX) ? slot_hint : (PARTY_MAX - 1);
     st.party[dst] = {true, (uint8_t)tid, 1};
     st.discovered_talents |= (1ULL << tid);
+    st.last_pick_slot = (int8_t)dst;
+    st.last_pick_talent = (uint8_t)tid;
     recalc_mods();
     save();
     return true;
@@ -517,6 +528,7 @@ bool debug_grant_charm(int cid)
 {
     if (cid < 0 || cid >= CHARM_N) return false;
     if (st.charm_lv[cid] < CHARMS[cid].max_lv) st.charm_lv[cid]++;
+    st.last_pick_charm = (uint8_t)cid;
     recalc_mods();
     save();
     return true;
@@ -573,6 +585,52 @@ const char* fmt(double v, char* buf, size_t len)
     if (s == 0) snprintf(buf, len, "%d", (int)(x + 0.5));
     else snprintf(buf, len, "%.1f%s", x, sfx[s]);
     return buf;
+}
+
+const char* style_name(uint8_t style)
+{
+    switch (style) {
+        case STYLE_COMBO_BLADE:   return "3-HIT BLADE";
+        case STYLE_FLURRY_DART:   return "RAPID DART";
+        case STYLE_MAGIC_BOLT:    return "MAGIC BOLT";
+        case STYLE_SPREAD_VOLLEY: return "3-WAY BOW";
+        case STYLE_SNIPER_LANCE:  return "SNIPER LANCE";
+        case STYLE_HEAVY_SLAM:    return "HEAVY SLAM";
+        case STYLE_PALADIN_WARD:  return "HOLY WARD";
+        case STYLE_ALCH_MEND:     return "HEAL BOLT";
+        default:                  return "STRIKER";
+    }
+}
+
+const char* trait_name(uint8_t trait)
+{
+    switch (trait) {
+        case TRAIT_BERSERK:   return "BERSERK +35%";
+        case TRAIT_VAMP:      return "VAMP +2.5 HP";
+        case TRAIT_CRIT:      return "CRIT +15%";
+        case TRAIT_WARDEN:    return "HAZARD -35%";
+        case TRAIT_HASTE:     return "HASTE +18%";
+        case TRAIT_EXEC:      return "EXEC +35%";
+        case TRAIT_THORNS:    return "THORNS";
+        case TRAIT_SCAVENGER: return "CRYSTAL +20%";
+        case TRAIT_FROST:     return "FROST SLOW";
+        case TRAIT_RAGE:      return "MP GAIN +30%";
+        case TRAIT_BARRIER:   return "START SHIELD";
+        default:              return "BALANCED";
+    }
+}
+
+const char* ult_desc(uint8_t ult)
+{
+    switch (ult) {
+        case ULT_CRYSTAL_RAIN: return "AOE CRYSTAL STORM";
+        case ULT_AQUA_STORM:   return "PIERCING SURGE";
+        case ULT_GRAND_SLAM:   return "HEAVY SHOCKWAVE";
+        case ULT_SANCTUARY:    return "HEAL + INVULN";
+        case ULT_STAR_BARRAGE: return "10X HOMING STARS";
+        case ULT_OVERDRIVE:    return "SLASH + PARTY MP";
+        default:               return "SPECIAL ART";
+    }
 }
 
 /* ---------- STS / Peglin 式ルートマップ生成 ---------- */
@@ -676,6 +734,7 @@ int grant_random_charm()
     if (n == 0) return -1;
     int cid = pool[rl_rand() % (uint32_t)n];
     st.charm_lv[cid]++;
+    st.last_pick_charm = (uint8_t)cid;
     recalc_mods();
     save();
     return cid;

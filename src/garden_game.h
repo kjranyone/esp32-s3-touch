@@ -77,6 +77,9 @@ struct State {
     bool draft_open;
     DraftCard draft[3];
     int8_t swap_talent;       /* >=0 のときは入替先スロット選択中 */
+    int8_t last_pick_slot;    /* 直近の加入/強化/入替スロット (0..2, -1=なし) */
+    uint8_t last_pick_talent; /* 直近の加入/強化/入替タレントID */
+    uint8_t last_pick_charm;  /* 直近の取得パッシブチャームID */
     bool phoenix_used;
     uint32_t pet_count;
 
@@ -132,6 +135,9 @@ int pet_remaining_s();
 double pet_mult();
 
 const char* fmt(double v, char* buf, size_t len);
+const char* style_name(uint8_t style);
+const char* trait_name(uint8_t trait);
+const char* ult_desc(uint8_t ult);
 
 /* STS / Peglin 風ルートマップ決定論的生成 */
 NodeKind map_node_kind(uint32_t step, int lane);

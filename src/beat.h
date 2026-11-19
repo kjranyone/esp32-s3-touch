@@ -62,6 +62,10 @@ constexpr int PEEKBTN_X = 276, PEEKBTN_Y = 58, PEEKBTN_W = 128, PEEKBTN_H = 44;
 constexpr int TITLEBTN_X = 148, TITLEBTN_Y = 58, TITLEBTN_W = 116, TITLEBTN_H = 44;
 constexpr int SFXBTN_X = 342, SFXBTN_Y = 360, SFXBTN_W = 126, SFXBTN_H = 44;
 
+/* タイトル確認警告ダイアログボタン */
+constexpr int DLG_CANCEL_X = 56,  DLG_CANCEL_Y = 290, DLG_CANCEL_W = 172, DLG_CANCEL_H = 54;
+constexpr int DLG_OK_X     = 252, DLG_OK_Y     = 290, DLG_OK_W     = 172, DLG_OK_H     = 54;
+
 /* BOX ボタン (HUD 右下) */
 constexpr int BOXBTN_X = 392, BOXBTN_Y = 410, BOXBTN_W = 82, BOXBTN_H = 66;
 
@@ -72,6 +76,6 @@ constexpr int SWAP_W = 146, SWAP_H = 212, SWAP_Y = 186;
 constexpr int SWAP_X[3] = {12, 167, 322};
 
 void render_hud(uint16_t* fb, int buf);
-void render_panel(uint16_t* fb, bool panel_open, bool info_peek, int buf);
+void render_panel(uint16_t* fb, bool panel_open, bool info_peek, int buf, bool title_confirm = false);
 
 } // namespace beat

@@ -266,6 +266,7 @@ enum EType  : uint8_t { E_SLIME, E_BAT, E_GOLEM, E_BOSS };
 enum DirectorMode : uint8_t {
     DIR_TITLE, DIR_OPENING,
     DIR_MAP, DIR_TRAVEL, DIR_CAMP, DIR_TREASURE, DIR_EVENT,
+    DIR_JOIN_CUTIN,
     DIR_BATTLE, DIR_BOSS_INTRO, DIR_WAVE_CLEAR, DIR_BOSS_VICTORY, DIR_GAME_OVER, DIR_ENDING
 };
 
@@ -336,6 +337,16 @@ static uint32_t rngs = 13371;
 static DirectorMode dir_mode = DIR_BATTLE;
 static uint16_t dir_timer = 0;
 static uint16_t dir_total = 1;
+static DirectorMode join_return_mode = DIR_BATTLE;
+static uint16_t join_return_timer = 0;
+static uint16_t join_return_total = 1;
+static uint8_t join_kind = 1;       /* 1=HIRE, 2=RANK UP, 3=SWAP, 4=TEAM BUFF(CHARM) */
+static uint8_t join_slot = 0;
+static uint8_t join_talent_id = 0;
+static uint8_t join_rank = 1;
+static uint8_t join_charm_id = 0;
+static uint8_t join_charm_lv = 1;
+static constexpr uint16_t JOIN_CUTIN_DUR = 126;
 static game::NodeKind cur_node_kind = game::NODE_BATTLE;
 static game::NodeKind travel_target_kind = game::NODE_BATTLE;
 static uint8_t travel_target_lane = 1;
@@ -728,26 +739,76 @@ void on_pet()
     }
 }
 
+static void finish_join_cutin()
+{
+    dir_mode = join_return_mode;
+    dir_timer = join_return_timer;
+    dir_total = join_return_total;
+    if (join_kind == 4) {
+        /* チームパッシブ適用: パーティ全員にオーラ VFX で全体強化を体感させる */
+        for (auto& a : allies) {
+            if (!a.alive || a.state == A_DOWN) continue;
+            spawn_vfx_sprite(a.x, a.y - 6, a.z, vfx_sprites::FXS_SHOCKWAVE_0, 4, 3, 1, 0, 0, true, 200);
+            spawn_vfx_sprite(a.x, a.y - 26, a.z, vfx_sprites::FXS_MIRA_BURST_0, 3, 3, 1, 1, 0, true, 256);
+        }
+        special_flash = 3;
+        sfx::play(sfx::SFX_CRYSTAL);
+    } else if (dir_mode == DIR_BATTLE && join_slot < ALLY_N && allies[join_slot].alive) {
+        Actor& a = allies[join_slot];
+        a.state = A_IDLE;
+        a.z = 92.0f;
+        a.vz = -9.2f;
+        a.vx = 0.0f;
+        a.vy = 0.0f;
+        a.invuln = true;
+        a.invuln_t = 42;
+        set_squash(a, 1, 7);
+        spawn_vfx_sprite(a.x, a.y - 4, 0.0f, vfx_sprites::FXS_SHOCKWAVE_0, 4, 3, 1, 0, 0, true, 256);
+        spawn_vfx_sprite(a.x, a.y - 26, 0.0f, vfx_sprites::FXS_MIRA_BURST_0, 3, 3, 1, 1, 0, true, 256);
+        special_flash = 3;
+        add_shake(2, 6);
+        sfx::play(sfx::SFX_HIT_HEAVY);
+    }
+    request_full_restore();
+}
+
 void on_draft_pick(int pick_result)
 {
     sfx::play(sfx::SFX_DRAFT_PICK);
     sync_party(false);
-    for (auto& a : allies) {
-        if (!a.alive || a.state == A_DOWN) continue;
-        spawn_vfx_sprite(a.x, a.y - 6, a.z, vfx_sprites::FXS_SHOCKWAVE_0, 4, 3, 1, 0, 0, true, 200);
-        spawn_vfx_sprite(a.x, a.y - 26, a.z, vfx_sprites::FXS_MIRA_BURST_0, 3, 3, 1, 1, 0, true, 256);
+    if (pick_result >= 1 && pick_result <= 4) {
+        if (dir_mode != DIR_JOIN_CUTIN) {
+            join_return_mode = dir_mode;
+            join_return_timer = dir_timer;
+            join_return_total = dir_total;
+        }
+        join_kind = (uint8_t)pick_result;
+        if (pick_result == 4) {
+            join_charm_id = (uint8_t)(game::st.last_pick_charm % game::CHARM_N);
+            join_charm_lv = game::st.charm_lv[join_charm_id];
+            if (join_charm_lv == 0) join_charm_lv = 1;
+            dir_total = 108;
+        } else {
+            int sl = (game::st.last_pick_slot >= 0 && game::st.last_pick_slot < ALLY_N) ? game::st.last_pick_slot : 0;
+            join_slot = (uint8_t)sl;
+            join_talent_id = (uint8_t)(game::st.last_pick_talent % game::TALENT_N);
+            join_rank = game::st.party[join_slot].active ? game::st.party[join_slot].rank : 1;
+            dir_total = JOIN_CUTIN_DUR;
+        }
+        dir_mode = DIR_JOIN_CUTIN;
+        dir_timer = 0;
+        special_flash = 4;
+        add_shake(2, 7);
+        flash_frames = 0;
+        request_full_restore();
+        return;
     }
-    if (pick_result == 1) flash_message("TALENT HIRED!", 48);
-    else if (pick_result == 2) flash_message("RANK UP!", 48);
-    else if (pick_result == 3) flash_message("PARTY SWAPPED!", 48);
-    else if (pick_result == 4) flash_message("CHARM EQUIPPED!", 48);
 }
 
 static bool has_saved_progress()
 {
     return game::st.wave_reached > 1 || game::st.boxes_opened > 0 ||
-           game::st.crystals >= 1.0 || game::st.run_number > 1 ||
-           game::st.total_clears > 0 || game::party_count() > 1;
+           game::st.crystals >= 1.0 || game::party_count() > 1;
 }
 
 bool is_title()
@@ -1147,6 +1208,7 @@ bool is_modal_director()
     return dir_mode == DIR_TITLE || dir_mode == DIR_OPENING ||
            dir_mode == DIR_MAP || dir_mode == DIR_TRAVEL ||
            dir_mode == DIR_CAMP || dir_mode == DIR_TREASURE || dir_mode == DIR_EVENT ||
+           dir_mode == DIR_JOIN_CUTIN ||
            dir_mode == DIR_GAME_OVER || dir_mode == DIR_ENDING;
 }
 
@@ -1211,6 +1273,14 @@ bool notify_tap(int x, int y)
         if (by >= 264 && by < 340) {
             if (x >= 16 && x < 236) { resolve_event_choice(0); return true; }
             if (x >= 244 && x < 464) { resolve_event_choice(1); return true; }
+        }
+        return false;
+    }
+    if (dir_mode == DIR_JOIN_CUTIN) {
+        if (dir_timer >= 18) {
+            sfx::play(sfx::SFX_TAP);
+            finish_join_cutin();
+            return true;
         }
         return false;
     }
@@ -3072,6 +3142,18 @@ void step()
         return;
     }
 
+    if (dir_mode == DIR_JOIN_CUTIN) {
+        uint16_t f = dir_timer++;
+        if (f == 14) {
+            sfx::play(sfx::SFX_CRYSTAL);
+            special_flash = 3;
+        }
+        if (dir_timer >= dir_total) {
+            finish_join_cutin();
+        }
+        return;
+    }
+
     if (dir_mode == DIR_GAME_OVER || dir_mode == DIR_ENDING) {
         if (dir_timer < 60000) dir_timer++;
         if (dir_mode == DIR_ENDING && (dir_timer % 18 == 0)) {
@@ -3587,8 +3669,252 @@ static void draw_altar_band(uint16_t* band, int by, int bh, int sx, int sy)
 }
 
 /* ---------------- オーバーレイ (ボスHP/Phase通知/カットイン/タイトル/OP/マップ/行軍/イベント/GameOver/Ending) ---------------- */
+static inline uint16_t blend50_rgb565(uint16_t dst, uint16_t src)
+{
+    return (uint16_t)(((dst & 0xF7DEu) >> 1) + ((src & 0xF7DEu) >> 1));
+}
+
+static inline uint16_t blend75_rgb565(uint16_t dst, uint16_t src)
+{
+    /* 25% dst + 75% src (背景をうっすら透過しつつ文字可読性を確保) */
+    uint16_t d25 = (uint16_t)((dst & 0xE79Cu) >> 2);
+    uint16_t s50 = (uint16_t)((src & 0xF7DEu) >> 1);
+    uint16_t s25 = (uint16_t)((src & 0xE79Cu) >> 2);
+    return (uint16_t)(d25 + s50 + s25);
+}
+
+static void blend_rect_band(uint16_t* band, int by, int bh, int x, int y, int w, int h, uint16_t col, bool strong = true)
+{
+    int x0 = x < 0 ? 0 : x;
+    int y0 = y < by ? by : y;
+    int x1 = x + w > FB_W ? FB_W : x + w;
+    int y1 = y + h > by + bh ? by + bh : y + h;
+    if (x0 >= x1 || y0 >= y1) return;
+    if (strong) {
+        for (int yy = y0; yy < y1; ++yy) {
+            uint16_t* row = band + (yy - by) * FB_W;
+            for (int xx = x0; xx < x1; ++xx) row[xx] = blend75_rgb565(row[xx], col);
+        }
+    } else {
+        for (int yy = y0; yy < y1; ++yy) {
+            uint16_t* row = band + (yy - by) * FB_W;
+            for (int xx = x0; xx < x1; ++xx) row[xx] = blend50_rgb565(row[xx], col);
+        }
+    }
+}
+
 static void draw_overlays_band(uint16_t* band, int by, int bh)
 {
+    /* 0b. 仲間加入 / ランクアップ / 入替 / チームパッシブ取得カットイン (DIR_JOIN_CUTIN) */
+    if (dir_mode == DIR_JOIN_CUTIN) {
+        const uint16_t f = dir_timer;
+        const uint16_t dur = dir_total > 0 ? dir_total : JOIN_CUTIN_DUR;
+
+        /* スライドイン / アウト補間 */
+        float slide = 0.0f;
+        if (f < 14) {
+            float u = 1.0f - (float)f / 14.0f;
+            slide = u * u * u;
+        } else if (f > dur - 12) {
+            float u = (float)(f - (dur - 12)) / 12.0f;
+            slide = u * u;
+        }
+        int off_l = -(int)(slide * 200.0f);
+        int off_r =  (int)(slide * 310.0f);
+        int off_t = -(int)(slide * 64.0f);
+
+        if (join_kind == 4) {
+            /* チーム全体パッシブ (CHARM) 取得カットイン */
+            const auto& ch = game::CHARMS[join_charm_id % game::CHARM_N];
+            const uint16_t rc = rarity_color(ch.rarity);
+            const uint16_t rbg = rarity_bg(ch.rarity);
+
+            blend_rect_band(band, by, bh, 0, 0, FB_W, FB_H, RGB(0x08, 0x0C, 0x18), false);
+            for (int s = 0; s < 10; ++s) {
+                int sy = 14 + s * 34;
+                int slen = 90 + (s % 3) * 65;
+                int sx = ((int)(f * (14 + (s % 4) * 4) + s * 113) % (FB_W + slen)) - slen;
+                blend_rect_band(band, by, bh, sx, sy, slen, (s & 1) ? 2 : 3, rc, false);
+            }
+
+            int top_y = 8 + off_t;
+            blend_rect_band(band, by, bh, 0, top_y, FB_W, 42, RGB(0x10, 0x18, 0x2C), true);
+            fill_rect_band(band, by, bh, 0, top_y, FB_W, 3, rc);
+            fill_rect_band(band, by, bh, 0, top_y + 39, FB_W, 3, rc);
+            draw_text_outline_band(band, by, bh, 16, top_y + 11, "TEAM BUFF!!", 3, C_GOLD);
+
+            char ptag[22];
+            snprintf(ptag, sizeof(ptag), "%s PASSIVE", game::rarity_tag(ch.rarity));
+            draw_text_shadow_band(band, by, bh, FB_W - 14 - text_w(ptag, 2), top_y + 14, ptag, 2, rc);
+
+            /* 左: レリックアイコン枠 */
+            int lx = 12 + off_l, ly = 60, lw = 158, lh = 232;
+            blend_rect_band(band, by, bh, lx, ly, lw, lh, RGB(0x0E, 0x16, 0x28), true);
+            blend_rect_band(band, by, bh, lx + 4, ly + 4, lw - 8, 162, rbg, false);
+            draw_rect_frame_band(band, by, bh, lx, ly, lw, lh, 2, rc);
+
+            int bob = (int)(sinf(f * 0.16f) * 5.0f);
+            int orb_r = 44 + (((f / 6) & 1) ? 4 : 0);
+            blend_rect_band(band, by, bh, lx + lw / 2 - orb_r, ly + 86 - orb_r + bob, orb_r * 2, orb_r * 2, rc, false);
+            draw_rect_frame_band(band, by, bh, lx + lw / 2 - 36, ly + 50 + bob, 72, 72, 2, C_GOLD);
+            uint8_t icon = (ch.eff == game::CE_PHOENIX_ASH || ch.eff == game::CE_WAVE_HEAL_PCT || ch.eff == game::CE_REGEN_X10)
+                         ? vfx_sprites::FXS_HEART_BUFF
+                         : ((ch.rarity >= game::RAR_SR) ? vfx_sprites::FXS_MIRA_BURST_1 : vfx_sprites::FXS_CRYSTAL_GEM_0);
+            draw_vfx_id_band(band, by, bh, icon, lx + lw / 2, ly + 86 + bob, 1, 0, 448);
+
+            char lvb[16];
+            snprintf(lvb, sizeof(lvb), "LV %u -> %u", (unsigned)(join_charm_lv > 0 ? join_charm_lv - 1 : 0), (unsigned)join_charm_lv);
+            draw_text_shadow_band(band, by, bh, lx + (lw - text_w(lvb, 2)) / 2, ly + 178, lvb, 2, C_GOLD);
+            draw_text_shadow_band(band, by, bh, lx + (lw - text_w("ALL ALLIES", 2)) / 2, ly + 204, "ALL ALLIES", 2, C_MINT);
+
+            /* 右: パッシブ効果説明 & チーム合算ステータス */
+            int rx = 178 + off_r, ry = 60, rw = 290, rh = 232;
+            blend_rect_band(band, by, bh, rx, ry, rw, rh, RGB(0x0E, 0x16, 0x28), true);
+            draw_rect_frame_band(band, by, bh, rx, ry, rw, rh, 2, rc);
+
+            char cnm[16];
+            snprintf(cnm, sizeof(cnm), "%.13s", ch.name);
+            draw_text_outline_band(band, by, bh, rx + 12, ry + 12, cnm, 2, rc);
+            fill_rect_band(band, by, bh, rx + 10, ry + 36, rw - 20, 2, rc);
+
+            /* パッシブ効果ハイライト枠 */
+            int ux = rx + 10, uy = ry + 48, uw = rw - 20, uh = 82;
+            blend_rect_band(band, by, bh, ux, uy, uw, uh, rbg, true);
+            draw_rect_frame_band(band, by, bh, ux, uy, uw, uh, 2, C_GOLD);
+            draw_text_shadow_band(band, by, bh, ux + 10, uy + 8, "PASSIVE EFFECT", 2, C_GOLD);
+            char ed[22];
+            snprintf(ed, sizeof(ed), "%.19s", ch.desc);
+            draw_text_shadow_band(band, by, bh, ux + 10, uy + 36, ed, 2, C_WHITE);
+            draw_text_band(band, by, bh, ux + 10, uy + 58, "ALWAYS ON FOR TEAM", 2, C_AQUA);
+
+            /* 現在のパーティ全体合計バフを表示 */
+            char t1[28], t2[28];
+            snprintf(t1, sizeof(t1), "TEAM ATK %d%% HP %d%%", game::st.mods.dmg_pct, game::st.mods.hp_pct);
+            snprintf(t2, sizeof(t2), "CRIT %d%%  BUFFS %d", game::st.mods.crit_pct, game::total_charms_count());
+            draw_text_shadow_band(band, by, bh, rx + 12, ry + 148, t1, 2, C_MINT);
+            draw_text_shadow_band(band, by, bh, rx + 12, ry + 174, t2, 2, C_GOLD);
+            draw_text_band(band, by, bh, rx + 12, ry + 202, "STACKS EVERY WAVE!", 2, C_WHITE);
+
+            int rem_w = (int)((long)(dur - f) * (FB_W - 48) / dur);
+            if (rem_w < 0) rem_w = 0;
+            fill_rect_band(band, by, bh, 24, 304, FB_W - 48, 4, RGB(0x20, 0x2A, 0x40));
+            fill_rect_band(band, by, bh, 24, 304, rem_w, 4, rc);
+            const char* cont = (f >= 14) ? "TAP TO CONTINUE!" : "ACTIVATING...";
+            draw_text_outline_band(band, by, bh, (FB_W - text_w(cont, 2)) / 2, 318, cont, 2,
+                                   ((f / 10) & 1) ? C_WHITE : C_GOLD);
+            return;
+        }
+
+        const auto& td = game::TALENTS[join_talent_id % game::TALENT_N];
+        const uint16_t rc = rarity_color(td.rarity);
+        const uint16_t rbg = rarity_bg(td.rarity);
+
+        /* 半透明ダーク幕 + レアリティ色の疾走スピードライン */
+        blend_rect_band(band, by, bh, 0, 0, FB_W, FB_H, RGB(0x08, 0x0C, 0x18), false);
+        for (int s = 0; s < 10; ++s) {
+            int sy = 14 + s * 34;
+            int slen = 90 + (s % 3) * 65;
+            int sx = ((int)(f * (16 + (s % 4) * 5) + s * 113) % (FB_W + slen)) - slen;
+            blend_rect_band(band, by, bh, sx, sy, slen, (s & 1) ? 2 : 3, rc, false);
+        }
+
+        /* 上部バナー (y = 8..50) */
+        int top_y = 8 + off_t;
+        blend_rect_band(band, by, bh, 0, top_y, FB_W, 42, RGB(0x10, 0x18, 0x2C), true);
+        fill_rect_band(band, by, bh, 0, top_y, FB_W, 3, rc);
+        fill_rect_band(band, by, bh, 0, top_y + 39, FB_W, 3, rc);
+        const char* hdr = (join_kind == 2) ? "RANK UP!!" : ((join_kind == 3) ? "SWAP IN!!" : "NEW ALLY!!");
+        uint16_t hdr_col = (join_kind == 2) ? C_GOLD : ((join_kind == 3) ? C_ORANGE : C_MINT);
+        draw_text_outline_band(band, by, bh, 16, top_y + 11, hdr, 3, hdr_col);
+
+        char slot_tag[20];
+        snprintf(slot_tag, sizeof(slot_tag), "%s SLOT %u", game::rarity_tag(td.rarity), (unsigned)(join_slot + 1));
+        draw_text_shadow_band(band, by, bh, FB_W - 14 - text_w(slot_tag, 2), top_y + 14, slot_tag, 2, rc);
+
+        /* 左: キャラポートレート枠 (x = 12..170, y = 60..292) */
+        int lx = 12 + off_l, ly = 60, lw = 158, lh = 232;
+        blend_rect_band(band, by, bh, lx, ly, lw, lh, RGB(0x0E, 0x16, 0x28), true);
+        blend_rect_band(band, by, bh, lx + 4, ly + 4, lw - 8, 168, rbg, false);
+        draw_rect_frame_band(band, by, bh, lx, ly, lw, lh, 2, rc);
+        /* 立ち絵背後の輝きバンド & 台座 */
+        int aura_w = 110 + (((f / 6) & 1) ? 14 : 0);
+        blend_rect_band(band, by, bh, lx + (lw - aura_w) / 2, ly + 42, aura_w, 86, rc, false);
+        fill_rect_band(band, by, bh, lx + 26, ly + 162, lw - 52, 6, rc);
+
+        /* 大サイズキャラ立ち絵 (1.75x = 448/256, 登場アクション -> 必殺決めポーズ -> 誇らしげ待機) */
+        int pose = (f < 12) ? 31 : ((f < 30) ? 33 : (int)((f / 8) & 3));
+        int bounce_y = 0;
+        int sx_q8 = 448, sy_q8 = 448;
+        if (f >= 10 && f < 18) {
+            int k = 18 - f;
+            bounce_y = -k * 2;
+            sx_q8 = 448 + k * 6;
+            sy_q8 = 448 - k * 5;
+        }
+        uint32_t pwords = 0; int psz = 0;
+        const uint16_t* prun = ensure_preview_pose(td.base_atlas, pose, td.use_orig_pal != 0,
+                                                   td.pal_pri, td.pal_sec, join_slot, pwords, psz);
+        blit_span_band(band, by, bh, prun, prun + pwords, psz, psz, psz / 2, psz - 3,
+                       lx + lw / 2, ly + 166 + bounce_y, 1, (f >= 13 && f <= 16) ? 1 : 0, sx_q8, sy_q8);
+
+        /* ポートレート下部: ランク & ロール */
+        char rk_buf[16];
+        if (join_kind == 2 && join_rank > 1) snprintf(rk_buf, sizeof(rk_buf), "*%u -> *%u", (unsigned)(join_rank - 1), (unsigned)join_rank);
+        else snprintf(rk_buf, sizeof(rk_buf), "RANK *%u", (unsigned)join_rank);
+        draw_text_shadow_band(band, by, bh, lx + (lw - text_w(rk_buf, 2)) / 2, ly + 182, rk_buf, 2, C_GOLD);
+        draw_text_shadow_band(band, by, bh, lx + (lw - text_w(td.role_tag, 2)) / 2, ly + 206, td.role_tag, 2, C_WHITE);
+
+        /* 右: ステータス & 技パネル (x = 178..468, y = 60..292) */
+        int rx = 178 + off_r, ry = 60, rw = 290, rh = 232;
+        blend_rect_band(band, by, bh, rx, ry, rw, rh, RGB(0x0E, 0x16, 0x28), true);
+        draw_rect_frame_band(band, by, bh, rx, ry, rw, rh, 2, rc);
+
+        /* キャラ名 (3x = 21px) */
+        char nm[14];
+        snprintf(nm, sizeof(nm), "%.10s", td.name);
+        draw_text_outline_band(band, by, bh, rx + 12, ry + 10, nm, 3, rc);
+        fill_rect_band(band, by, bh, rx + 10, ry + 40, rw - 20, 2, rc);
+
+        /* 実効ステータス (ランク倍率・チャーム補正反映) */
+        float rm = 1.0f + 0.28f * (float)(join_rank > 0 ? join_rank - 1 : 0);
+        int eff_hp  = (int)(effective_ally_hpmax(join_talent_id, join_rank) + 0.5f);
+        int eff_atk = (int)(td.dmg * rm * (game::st.mods.dmg_pct / 100.0f) + 0.5f);
+        char st_hp[16], st_atk[16];
+        snprintf(st_hp, sizeof(st_hp), "HP %d", eff_hp);
+        snprintf(st_atk, sizeof(st_atk), "ATK %d", eff_atk);
+        draw_text_shadow_band(band, by, bh, rx + 12, ry + 50, st_hp, 2, C_MINT);
+        draw_text_shadow_band(band, by, bh, rx + 150, ry + 50, st_atk, 2, C_GOLD);
+
+        /* 戦闘スタイル & 特性 */
+        char st_ln[28], tr_ln[28];
+        snprintf(st_ln, sizeof(st_ln), "STYLE: %.14s", game::style_name(td.style));
+        snprintf(tr_ln, sizeof(tr_ln), "TRAIT: %.14s", game::trait_name(td.trait));
+        draw_text_band(band, by, bh, rx + 12, ry + 76, st_ln, 2, C_WHITE);
+        draw_text_band(band, by, bh, rx + 12, ry + 102, tr_ln, 2, C_AQUA);
+
+        /* 固有必殺技 (ULTIMATE SKILL) ハイライト枠 */
+        int ux = rx + 10, uy = ry + 132, uw = rw - 20, uh = 88;
+        blend_rect_band(band, by, bh, ux, uy, uw, uh, rbg, true);
+        draw_rect_frame_band(band, by, bh, ux, uy, uw, uh, 2, C_GOLD);
+        draw_text_shadow_band(band, by, bh, ux + 10, uy + 8, "ULTIMATE SKILL", 2, C_GOLD);
+        char unm[20];
+        snprintf(unm, sizeof(unm), "%.18s", td.ult_name);
+        draw_text_shadow_band(band, by, bh, ux + 10, uy + 34, unm, 2, C_WHITE);
+        char udsc[22];
+        snprintf(udsc, sizeof(udsc), "%.19s", game::ult_desc(td.ult));
+        draw_text_band(band, by, bh, ux + 10, uy + 60, udsc, 2, C_MINT);
+
+        /* 下部カウントダウンバー & タップ案内 */
+        int rem_w = (int)((long)(JOIN_CUTIN_DUR - f) * (FB_W - 48) / JOIN_CUTIN_DUR);
+        if (rem_w < 0) rem_w = 0;
+        fill_rect_band(band, by, bh, 24, 304, FB_W - 48, 4, RGB(0x20, 0x2A, 0x40));
+        fill_rect_band(band, by, bh, 24, 304, rem_w, 4, rc);
+        const char* cont = (f >= 18) ? "TAP TO DEPLOY!" : "DEPLOYING...";
+        draw_text_outline_band(band, by, bh, (FB_W - text_w(cont, 2)) / 2, 318, cont, 2,
+                               ((f / 10) & 1) ? C_WHITE : C_GOLD);
+        return;
+    }
+
     /* 0c. STS/Peglin 風ルート分岐マップ (DIR_MAP) */
     if (dir_mode == DIR_MAP) {
         const bool pulse = ((dir_timer / 20) & 1) == 0;
@@ -4112,7 +4438,10 @@ void render(uint16_t* fb, int buf)
     int n_act = 0;
     Actor* order[ALLY_N + ENEMY_N];
     int n = 0;
-    for (auto& a : allies) if (a.alive) order[n++] = &a;
+    for (int i = 0; i < ALLY_N; ++i) {
+        if (dir_mode == DIR_JOIN_CUTIN && join_kind != 4 && i == (int)join_slot) continue;
+        if (allies[i].alive) order[n++] = &allies[i];
+    }
     for (auto& e : enemies) if (e.alive || (e.state == A_DOWN && e.timer)) order[n++] = &e;
     for (int i = 1; i < n; i++) {
         Actor* k = order[i]; int j = i - 1;
@@ -4283,6 +4612,7 @@ void render(uint16_t* fb, int buf)
             (dir_mode == DIR_BOSS_VICTORY && ((by < 160 && by + bh > 80) || (by < 180 && by + bh > 64))) ||
             (dir_mode == DIR_TITLE || dir_mode == DIR_OPENING || dir_mode == DIR_MAP || dir_mode == DIR_TRAVEL ||
              dir_mode == DIR_CAMP || dir_mode == DIR_TREASURE || dir_mode == DIR_EVENT ||
+             dir_mode == DIR_JOIN_CUTIN ||
              dir_mode == DIR_GAME_OVER || dir_mode == DIR_ENDING) ||
             (flash_frames > 0 && dir_mode != DIR_TITLE && dir_mode != DIR_OPENING && dir_mode != DIR_GAME_OVER && dir_mode != DIR_ENDING && by < 92 && by + bh > 46)) {
             cur_mask = 0x7FFFu;
@@ -4507,7 +4837,7 @@ void render_hud(uint16_t* fb, int buf)
     int pet_s = game::pet_remaining_s();
     char meta_r[16];
     if (pet_s > 0) snprintf(meta_r, sizeof(meta_r), "PET %d:%02d", pet_s / 60, pet_s % 60);
-    else snprintf(meta_r, sizeof(meta_r), "CHM %d", game::total_charms_count());
+    else snprintf(meta_r, sizeof(meta_r), "BUF %d", game::total_charms_count());
 
     bool top_dirty = !hs.valid || hs.lead_hw != lead_hw || hs.wave != wave_n ||
                      hs.pet_s != pet_s || hs.box_ready != box_ready || hs.draft_open != draft_open ||
@@ -4692,40 +5022,6 @@ void render_hud(uint16_t* fb, int buf)
     hs.valid = true;
 }
 
-static inline uint16_t blend50_rgb565(uint16_t dst, uint16_t src)
-{
-    return (uint16_t)(((dst & 0xF7DEu) >> 1) + ((src & 0xF7DEu) >> 1));
-}
-
-static inline uint16_t blend75_rgb565(uint16_t dst, uint16_t src)
-{
-    /* 25% dst + 75% src (背景をうっすら透過しつつ文字可読性を確保) */
-    uint16_t d25 = (uint16_t)((dst & 0xE79Cu) >> 2);
-    uint16_t s50 = (uint16_t)((src & 0xF7DEu) >> 1);
-    uint16_t s25 = (uint16_t)((src & 0xE79Cu) >> 2);
-    return (uint16_t)(d25 + s50 + s25);
-}
-
-static void blend_rect_band(uint16_t* band, int by, int bh, int x, int y, int w, int h, uint16_t col, bool strong = true)
-{
-    int x0 = x < 0 ? 0 : x;
-    int y0 = y < by ? by : y;
-    int x1 = x + w > FB_W ? FB_W : x + w;
-    int y1 = y + h > by + bh ? by + bh : y + h;
-    if (x0 >= x1 || y0 >= y1) return;
-    if (strong) {
-        for (int yy = y0; yy < y1; ++yy) {
-            uint16_t* row = band + (yy - by) * FB_W;
-            for (int xx = x0; xx < x1; ++xx) row[xx] = blend75_rgb565(row[xx], col);
-        }
-    } else {
-        for (int yy = y0; yy < y1; ++yy) {
-            uint16_t* row = band + (yy - by) * FB_W;
-            for (int xx = x0; xx < x1; ++xx) row[xx] = blend50_rgb565(row[xx], col);
-        }
-    }
-}
-
 /* ---------------- ルートボックス 3択ドラフト / 入替 / ステータス画面 (半透明透過 + 最小 2x) ---------------- */
 static void draw_draft_card_band(uint16_t* band, int by, int bh, int c_idx)
 {
@@ -4737,8 +5033,9 @@ static void draw_draft_card_band(uint16_t* band, int by, int bh, int c_idx)
     blend_rect_band(band, by, bh, x, y, CARD_W, CARD_H, RGB(0x10, 0x16, 0x26), true);
     draw_rect_frame_band(band, by, bh, x, y, CARD_W, CARD_H, 2, rc);
     blend_rect_band(band, by, bh, x + 2, y + 2, CARD_W - 4, 24, rbg, true);
-    const char* rt = game::rarity_tag(dc.rarity);
-    draw_text_shadow_band(band, by, bh, x + (CARD_W - text_w(rt, 2)) / 2, y + 7, rt, 2, rc);
+    char hdr_tag[16];
+    snprintf(hdr_tag, sizeof(hdr_tag), "%s %s", game::rarity_tag(dc.rarity), dc.is_talent ? "HERO" : "BUFF");
+    draw_text_shadow_band(band, by, bh, x + (CARD_W - text_w(hdr_tag, 2)) / 2, y + 7, hdr_tag, 2, rc);
 
     /* プレビュー枠 (h = 84px, 背景透過あり) */
     blend_rect_band(band, by, bh, x + 8, y + 30, CARD_W - 16, 84, RGB(0x08, 0x0E, 0x1C), false);
@@ -4801,12 +5098,12 @@ static void draw_draft_card_band(uint16_t* band, int by, int bh, int c_idx)
 
         fill_rect_band(band, by, bh, x + 8, y + 236, CARD_W - 16, 46, RGB(0x28, 0x48, 0x62));
         draw_rect_frame_band(band, by, bh, x + 8, y + 236, CARD_W - 16, 46, 2, rc);
-        const char* cta = "EQUIP";
+        const char* cta = "ALL BUFF";
         draw_text_shadow_band(band, by, bh, x + (CARD_W - text_w(cta, 2)) / 2, y + 252, cta, 2, C_WHITE);
     }
 }
 
-void render_panel(uint16_t* fb, bool open, bool info_peek, int)
+void render_panel(uint16_t* fb, bool open, bool info_peek, int, bool title_confirm)
 {
     if (!open || !band_buf) return;
     const uint16_t C_PAN_TINT = RGB(0x0A, 0x0E, 0x1C);
@@ -4910,7 +5207,7 @@ void render_panel(uint16_t* fb, bool open, bool info_peek, int)
             draw_text_shadow_band(band_buf, by, bh, 20, PANEL_Y + 172, b1, 2, C_GOLD);
             draw_text_shadow_band(band_buf, by, bh, 20, PANEL_Y + 196, b2, 2, C_MINT);
 
-            /* 所持チャーム上位 4 件 (2列 x 2行, 半透明 2x バッジ) */
+            /* 所持パッシブバフ上位 4 件 (2列 x 2行, 実際の効果 + LV を直接表示) */
             int shown = 0;
             for (int cid = 0; cid < game::CHARM_N && shown < 4; ++cid) {
                 uint8_t lv = game::st.charm_lv[cid];
@@ -4919,13 +5216,13 @@ void render_panel(uint16_t* fb, bool open, bool info_peek, int)
                 int bx = 12 + col * 232, b_y = PANEL_Y + 226 + row * 38;
                 blend_rect_band(band_buf, by, bh, bx, b_y, 224, 32, RGB(0x12, 0x1C, 0x30), true);
                 draw_rect_frame_band(band_buf, by, bh, bx, b_y, 224, 32, 1, rarity_color(game::CHARMS[cid].rarity));
-                char cb[20];
-                snprintf(cb, sizeof(cb), "%.12s LV%u", game::CHARMS[cid].name, (unsigned)lv);
+                char cb[22];
+                snprintf(cb, sizeof(cb), "%.14s*%u", game::CHARMS[cid].desc, (unsigned)lv);
                 draw_text_band(band_buf, by, bh, bx + 8, b_y + 9, cb, 2, rarity_color(game::CHARMS[cid].rarity));
                 shown++;
             }
             if (shown == 0) {
-                draw_text_shadow_band(band_buf, by, bh, 20, PANEL_Y + 242, "NO CHARMS YET", 2, RGB(0xA8, 0xB8, 0xD0));
+                draw_text_shadow_band(band_buf, by, bh, 20, PANEL_Y + 242, "NO PASSIVE BUFFS YET", 2, RGB(0xA8, 0xB8, 0xD0));
             }
 
             char ftr[36];
@@ -4943,6 +5240,41 @@ void render_panel(uint16_t* fb, bool open, bool info_peek, int)
             const char* slbl = sfx_on ? "SFX:ON" : "SFX:OFF";
             draw_text_shadow_band(band_buf, by, bh, SFXBTN_X + (SFXBTN_W - text_w(slbl, 2)) / 2,
                                   SFXBTN_Y + 15, slbl, 2, sfx_on ? C_WHITE : RGB(0xD0, 0xA0, 0xA8));
+        }
+
+        /* タイトル復帰・ゲームリセット警告確認ダイアログ (モーダル前面) */
+        if (title_confirm) {
+            blend_rect_band(band_buf, by, bh, PANEL_X, PANEL_Y, PANEL_W, PANEL_H, RGB(0x06, 0x08, 0x12), false);
+            const int dx = 36, dy = 112, dw = 408, dh = 248;
+            blend_rect_band(band_buf, by, bh, dx, dy, dw, dh, RGB(0x14, 0x10, 0x1E), true);
+            draw_rect_frame_band(band_buf, by, bh, dx, dy, dw, dh, 3, C_RED);
+            draw_rect_frame_band(band_buf, by, bh, dx + 4, dy + 4, dw - 8, dh - 8, 1, C_GOLD);
+
+            /* 警告ヘッダ帯 */
+            blend_rect_band(band_buf, by, bh, dx + 3, dy + 3, dw - 6, 44, RGB(0x5E, 0x18, 0x20), true);
+            const char* whdr = "WARNING!";
+            draw_text_outline_band(band_buf, by, bh, dx + (dw - text_w(whdr, 3)) / 2, dy + 14, whdr, 3, C_GOLD);
+
+            const char* l1 = "RETURN TO TITLE?";
+            const char* l2 = "CURRENT GAME WILL";
+            const char* l3 = "BE RESET!";
+            draw_text_shadow_band(band_buf, by, bh, dx + (dw - text_w(l1, 2)) / 2, dy + 68, l1, 2, C_WHITE);
+            draw_text_shadow_band(band_buf, by, bh, dx + (dw - text_w(l2, 2)) / 2, dy + 102, l2, 2, C_ORANGE);
+            draw_text_outline_band(band_buf, by, bh, dx + (dw - text_w(l3, 2)) / 2, dy + 128, l3, 2, C_RED);
+
+            /* CANCEL ボタン (左・安全側) */
+            fill_rect_band(band_buf, by, bh, DLG_CANCEL_X, DLG_CANCEL_Y, DLG_CANCEL_W, DLG_CANCEL_H, RGB(0x1E, 0x32, 0x4E));
+            draw_rect_frame_band(band_buf, by, bh, DLG_CANCEL_X, DLG_CANCEL_Y, DLG_CANCEL_W, DLG_CANCEL_H, 2, C_AQUA);
+            draw_text_shadow_band(band_buf, by, bh,
+                                  DLG_CANCEL_X + (DLG_CANCEL_W - text_w("CANCEL", 2)) / 2,
+                                  DLG_CANCEL_Y + 20, "CANCEL", 2, C_WHITE);
+
+            /* TO TITLE ボタン (右・リセット確定) */
+            fill_rect_band(band_buf, by, bh, DLG_OK_X, DLG_OK_Y, DLG_OK_W, DLG_OK_H, RGB(0x74, 0x20, 0x26));
+            draw_rect_frame_band(band_buf, by, bh, DLG_OK_X, DLG_OK_Y, DLG_OK_W, DLG_OK_H, 2, C_GOLD);
+            draw_text_shadow_band(band_buf, by, bh,
+                                  DLG_OK_X + (DLG_OK_W - text_w("TO TITLE", 2)) / 2,
+                                  DLG_OK_Y + 20, "TO TITLE", 2, C_WHITE);
         }
 
         memcpy(fb + by * FB_W, band_buf, (size_t)(bh * FB_W * 2));
