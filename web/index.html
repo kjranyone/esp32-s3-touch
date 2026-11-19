@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>ルミの水晶庭園 — ESP32-S3 Web Emulator</title>
+  <style>
+    :root {
+      --bg-0: #090d16;
+      --bg-1: #111827;
+      --panel: rgba(18, 25, 42, 0.82);
+      --border: rgba(112, 226, 244, 0.18);
+      --border-strong: rgba(112, 226, 244, 0.36);
+      --text: #e6eefc;
+      --muted: #8fa3c4;
+      --accent: #70e2f4;
+      --gold: #ffcc44;
+      --violet: #b878ff;
+      --danger: #f45b69;
+      --bezel: #16181f;
+      --bezel-edge: #2c3140;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: system-ui, -apple-system, "Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(900px 540px at 20% 10%, rgba(112, 226, 244, 0.11), transparent 60%),
+        radial-gradient(760px 500px at 85% 90%, rgba(184, 120, 255, 0.12), transparent 60%),
+        var(--bg-0);
+      color: var(--text);
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .page {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 16px 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .title-block h1 {
+      margin: 0;
+      font-size: clamp(1.25rem, 2.5vw, 1.6rem);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .badge {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(112, 226, 244, 0.14);
+      border: 1px solid var(--border-strong);
+      color: var(--accent);
+    }
+
+    .subtitle {
+      margin: 4px 0 0;
+      font-size: 0.86rem;
+      color: var(--muted);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
+      border-radius: 9px;
+      padding: 7px 12px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, transform 0.08s;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      user-select: none;
+    }
+
+    .btn:hover {
+      background: rgba(112, 226, 244, 0.12);
+      border-color: var(--border-strong);
+    }
+
+    .btn:active { transform: translateY(1px); }
+
+    .btn.active {
+      background: rgba(112, 226, 244, 0.22);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+
+    .btn.gold { border-color: rgba(255, 204, 68, 0.35); color: var(--gold); }
+    .btn.gold:hover { background: rgba(255, 204, 68, 0.14); }
+    .btn.violet { border-color: rgba(184, 120, 255, 0.38); color: #d6b2ff; }
+    .btn.violet:hover { background: rgba(184, 120, 255, 0.16); }
+    .btn.danger { border-color: rgba(244, 91, 105, 0.35); color: #ff8e98; }
+    .btn.danger:hover { background: rgba(244, 91, 105, 0.16); }
+
+    .stage {
+      display: grid;
+      grid-template-columns: minmax(0, auto) minmax(300px, 1fr);
+      gap: 22px;
+      align-items: start;
+      justify-content: center;
+    }
+
+    .stage.zen {
+      grid-template-columns: minmax(0, auto);
+    }
+
+    .stage.zen .side-panel {
+      display: none;
+    }
+
+    @media (max-width: 900px) {
+      .stage {
+        grid-template-columns: minmax(0, 1fr);
+        justify-items: center;
+      }
+      .side-panel {
+        width: 100%;
+        max-width: 540px;
+      }
+    }
+
+    /* ---------- Real-Hardware Bezel Frame ---------- */
+    .device-shell {
+      position: relative;
+      background: linear-gradient(145deg, #212530, #11131a 60%, #0b0d12);
+      border: 1px solid #353b4d;
+      border-radius: 26px;
+      padding: 20px 20px 16px;
+      box-shadow:
+        0 24px 60px rgba(0, 0, 0, 0.65),
+        0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+        0 0 42px rgba(112, 226, 244, 0.07);
+      width: min(100%, 524px);
+    }
+
+    .device-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      padding: 0 4px;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: #6f7c96;
+      letter-spacing: 0.06em;
+    }
+
+    .power-led {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .led-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #4ef09a;
+      box-shadow: 0 0 8px #4ef09a;
+    }
+
+    .screen-frame {
+      position: relative;
+      width: 100%;
+      max-width: 480px;
+      aspect-ratio: 1 / 1;
+      margin: 0 auto;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #05070d;
+      box-shadow:
+        0 0 0 2px #05060a,
+        0 0 0 3px rgba(255, 255, 255, 0.06);
+    }
+
+    canvas#lcd {
+      display: block;
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      touch-action: none;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .loading-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: rgba(7, 10, 18, 0.92);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 0.88rem;
+      transition: opacity 0.25s ease;
+    }
+
+    .loading-overlay.hidden {
+      display: none;
+    }
+
+    .spinner {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 3px solid rgba(112, 226, 244, 0.2);
+      border-top-color: var(--accent);
+      animation: spin 0.85s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .device-footer {
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 0 4px;
+    }
+
+    .hw-label {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: #69758d;
+      letter-spacing: 0.04em;
+    }
+
+    .speed-group {
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .speed-group .btn {
+      padding: 4px 9px;
+      font-size: 0.74rem;
+      font-family: var(--mono);
+    }
+
+    /* ---------- Side Panel ---------- */
+    .side-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px 16px;
+      backdrop-filter: blur(10px);
+    }
+
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: 0.04em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .hint-list {
+      margin: 0;
+      padding-left: 18px;
+      font-size: 0.82rem;
+      line-height: 1.6;
+      color: #c7d4eb;
+    }
+
+    .hint-list strong { color: #ffffff; }
+
+    .demo-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .demo-grid .btn {
+      justify-content: center;
+      padding: 8px 10px;
+      font-size: 0.8rem;
+    }
+
+    .serial-log {
+      height: 148px;
+      overflow-y: auto;
+      background: #060911;
+      border: 1px solid rgba(112, 226, 244, 0.16);
+      border-radius: 10px;
+      padding: 10px;
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      line-height: 1.48;
+      color: #b9f0ff;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .serial-form {
+      margin-top: 8px;
+      display: flex;
+      gap: 6px;
+    }
+
+    .serial-input {
+      flex: 1;
+      min-width: 0;
+      background: #080c16;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 10px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      outline: none;
+    }
+
+    .serial-input:focus {
+      border-color: var(--accent);
+    }
+
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      color: var(--muted);
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+
+    footer.credit-footer {
+      margin-top: 4px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    .credit-author {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .credit-links {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+
+    .credit-links a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.15s, color 0.15s;
+    }
+
+    .credit-links a:hover {
+      color: #ffffff;
+      border-bottom-color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="title-block">
+        <h1>
+          ルミの水晶庭園
+          <span class="badge">ESP32-S3 → WASM</span>
+        </h1>
+        <p class="subtitle">
+          全50ウェーブ・ローグライト オートバトラー — 実機 C++ ゲームエンジンをそのままブラウザ実行
+        </p>
+      </div>
+      <div class="header-actions">
+        <button class="btn" id="btn-shot" title="480x480 PNG スクリーンショットを保存">📸 スクショ保存</button>
+        <button class="btn" id="btn-zen" title="サイドパネルの表示切替">🖥 筐体のみ</button>
+        <a class="btn" href="https://github.com/kjranyone/esp32-s3-touch" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </header>
+
+    <main class="stage" id="stage">
+      <!-- Real-hardware Bezel Emulator -->
+      <section class="device-shell" aria-label="ESP32-S3 480x480 Smart Screen Emulator">
+        <div class="device-top">
+          <span class="power-led"><span class="led-dot"></span>RUNNING · <span id="stat-fps">--</span> FPS</span>
+          <span id="stat-wave">RUN #1 · WAVE 1/50</span>
+        </div>
+
+        <div class="screen-frame">
+          <canvas id="lcd" width="480" height="480"></canvas>
+          <div class="loading-overlay" id="loading">
+            <div class="spinner"></div>
+            <div id="loading-msg">Booting ESP32-S3 WASM Core...</div>
+          </div>
+        </div>
+
+        <div class="device-footer">
+          <span class="hw-label">ESP32-4848S040C · 4.0&quot; 480×480 RGB565</span>
+          <div class="speed-group" role="group" aria-label="Simulation speed">
+            <button class="btn" data-speed="0">PAUSE</button>
+            <button class="btn active" data-speed="1">1x</button>
+            <button class="btn" data-speed="2">2x</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Demo & Virtual Serial Side Panel -->
+      <aside class="side-panel">
+        <div class="card">
+          <h2>操作ガイド</h2>
+          <ul class="hint-list">
+            <li><strong>タップ / クリック</strong>: 右下の <code>BOX</code> でルートボックス開封＆3択ドラフト、演出スキップ</li>
+            <li><strong>縦スワイプ（画面中央）</strong>: ルミを<strong>なでなで (PET!)</strong> してドロップ増加バフ</li>
+            <li><strong>セーブデータ</strong>: 実機 NVS と同じくブラウザ (<code>localStorage</code>) に自動保存</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h2>デモ・見どころショートカット</h2>
+          <div class="demo-grid">
+            <button class="btn" id="act-pet">✨ なでなで (PET)</button>
+            <button class="btn gold" data-cmd="box">🎁 ルートボックス</button>
+            <button class="btn violet" data-cmd="ult">⚡ 必殺技 (ULT)</button>
+            <button class="btn danger" data-cmd="boss">👹 ボス召喚</button>
+            <button class="btn" data-cmd="wave 50">👑 Wave 50 へ</button>
+            <button class="btn gold" data-cmd="give 500">💎 水晶 +500</button>
+            <button class="btn" data-cmd="unlockall">🔓 全プール解放</button>
+            <button class="btn" data-cmd="reset">🔄 ランやり直し</button>
+          </div>
+          <div class="meta-row">
+            <span>※ 実機のシリアルデバッグコマンドをそのまま実行します</span>
+            <button class="btn danger" id="act-hardreset" style="padding:3px 8px;font-size:0.72rem;">セーブ初期化</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>
+            仮想シリアルコンソール (UART 115200)
+            <button class="btn" id="btn-clear-log" style="padding:2px 8px;font-size:0.7rem;">Clear</button>
+          </h2>
+          <div class="serial-log" id="serial-log"></div>
+          <form class="serial-form" id="serial-form">
+            <input
+              class="serial-input"
+              id="serial-input"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="コマンド入力 (例: ? / wave 25 / dmg_pct 200 / dump)"
+            />
+            <button class="btn" type="submit">Send</button>
+          </form>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="credit-footer">
+      <div>Created by <span class="credit-author">Kojiro Tanaka</span></div>
+      <div class="credit-links">
+        <a href="https://x.com/mu_sette" target="_blank" rel="noopener">X: @mu_sette ↗</a>
+        <a href="https://oto-nari.com" target="_blank" rel="noopener">Web: https://oto-nari.com ↗</a>
+      </div>
+    </footer>
+  </div>
+
+  <script src="crystal_garden.js"></script>
+  <script>
+    (() => {
+      const canvas = document.getElementById('lcd');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      const loadingEl = document.getElementById('loading');
+      const loadingMsg = document.getElementById('loading-msg');
+      const serialLogEl = document.getElementById('serial-log');
+      const serialForm = document.getElementById('serial-form');
+      const serialInput = document.getElementById('serial-input');
+      const statFps = document.getElementById('stat-fps');
+      const statWave = document.getElementById('stat-wave');
+      const stageEl = document.getElementById('stage');
+
+      let logLines = [];
+      let logBuf = '';
+      window.onEmulatorSerial = (chunk) => {
+        logBuf += chunk;
+        const parts = logBuf.split('\n');
+        logBuf = parts.pop();
+        for (const p of parts) {
+          logLines.push(p.replace(/\r/g, ''));
+        }
+        if (logLines.length > 200) {
+          logLines = logLines.slice(logLines.length - 200);
+        }
+        serialLogEl.textContent = logLines.join('\n') + (logBuf ? '\n' + logBuf : '');
+        serialLogEl.scrollTop = serialLogEl.scrollHeight;
+      };
+
+      const cmdHistory = [];
+      let cmdHistIdx = -1;
+      let speedMult = 1;
+      let mod = null;
+      let api = null;
+
+      function sendCmd(cmd) {
+        if (!api || !cmd.trim()) return;
+        api.sendCommand(cmd.trim());
+      }
+
+      document.getElementById('btn-zen').addEventListener('click', (e) => {
+        const zen = stageEl.classList.toggle('zen');
+        e.currentTarget.classList.toggle('active', zen);
+        e.currentTarget.textContent = zen ? '🛠 パネル表示' : '🖥 筐体のみ';
+      });
+
+      document.getElementById('btn-clear-log').addEventListener('click', () => {
+        logLines = [];
+        logBuf = '';
+        serialLogEl.textContent = '';
+      });
+
+      document.getElementById('btn-shot').addEventListener('click', () => {
+        const a = document.createElement('a');
+        a.download = `crystal-garden-w${api ? api.getWave() : 1}.png`;
+        a.href = canvas.toDataURL('image/png');
+        a.click();
+      });
+
+      document.querySelectorAll('[data-speed]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          speedMult = Number(btn.dataset.speed);
+          document.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('active', b === btn));
+        });
+      });
+
+      document.querySelectorAll('[data-cmd]').forEach((btn) => {
+        btn.addEventListener('click', () => sendCmd(btn.dataset.cmd));
+      });
+
+      document.getElementById('act-pet').addEventListener('click', () => {
+        if (api) api.triggerPet();
+      });
+
+      document.getElementById('act-hardreset').addEventListener('click', () => {
+        if (confirm('メタ進行を含むセーブデータを初期化して Run #1 から始めますか？')) {
+          sendCmd('hardreset');
+        }
+      });
+
+      serialForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const v = serialInput.value.trim();
+        if (!v) return;
+        cmdHistory.push(v);
+        cmdHistIdx = cmdHistory.length;
+        sendCmd(v);
+        serialInput.value = '';
+      });
+
+      serialInput.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowUp' && cmdHistory.length > 0) {
+          e.preventDefault();
+          cmdHistIdx = Math.max(0, cmdHistIdx - 1);
+          serialInput.value = cmdHistory[cmdHistIdx];
+        } else if (e.key === 'ArrowDown' && cmdHistory.length > 0) {
+          e.preventDefault();
+          cmdHistIdx = Math.min(cmdHistory.length, cmdHistIdx + 1);
+          serialInput.value = cmdHistory[cmdHistIdx] || '';
+        }
+      });
+
+      function clientToLcd(ev) {
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.round(((ev.clientX - rect.left) / rect.width) * 480);
+        const y = Math.round(((ev.clientY - rect.top) / rect.height) * 480);
+        return [Math.max(0, Math.min(479, x)), Math.max(0, Math.min(479, y))];
+      }
+
+      let activePointerId = null;
+      canvas.addEventListener('pointerdown', (ev) => {
+        if (!api) return;
+        if (activePointerId !== null) return;
+        activePointerId = ev.pointerId;
+        canvas.setPointerCapture(ev.pointerId);
+        const [x, y] = clientToLcd(ev);
+        api.pointerDown(x, y);
+      });
+
+      canvas.addEventListener('pointermove', (ev) => {
+        if (!api || ev.pointerId !== activePointerId) return;
+        const [x, y] = clientToLcd(ev);
+        api.pointerMove(x, y);
+      });
+
+      function endPointer(ev) {
+        if (!api || ev.pointerId !== activePointerId) return;
+        activePointerId = null;
+        const [x, y] = clientToLcd(ev);
+        api.pointerUp(x, y);
+      }
+      canvas.addEventListener('pointerup', endPointer);
+      canvas.addEventListener('pointercancel', endPointer);
+
+      window.addEventListener('pagehide', () => {
+        if (api) api.save();
+      });
+
+      const params = new URLSearchParams(location.search);
+      if (params.get('zen') === '1') {
+        stageEl.classList.add('zen');
+        const zb = document.getElementById('btn-zen');
+        zb.classList.add('active');
+        zb.textContent = '🛠 パネル表示';
+      }
+
+      createCrystalGarden().then((Module) => {
+        mod = Module;
+        api = {
+          init: Module.cwrap('emu_init', null, []),
+          step: Module.cwrap('emu_step', null, ['number']),
+          render: Module.cwrap('emu_render', null, []),
+          getRgbaPtr: Module.cwrap('emu_get_rgba_ptr', 'number', []),
+          pointerDown: Module.cwrap('emu_pointer_down', null, ['number', 'number']),
+          pointerMove: Module.cwrap('emu_pointer_move', null, ['number', 'number']),
+          pointerUp: Module.cwrap('emu_pointer_up', null, ['number', 'number']),
+          triggerPet: Module.cwrap('emu_trigger_pet', null, []),
+          sendCommand: Module.cwrap('emu_send_command', null, ['string']),
+          save: Module.cwrap('emu_save', null, []),
+          getWave: Module.cwrap('emu_get_wave', 'number', []),
+          getRun: Module.cwrap('emu_get_run', 'number', []),
+        };
+
+        api.init();
+        const initCmd = params.get('cmd');
+        if (initCmd) {
+          initCmd.split(';').forEach((c) => sendCmd(c));
+          api.step(1 / 60);
+          api.render();
+        }
+        const imgData = ctx.createImageData(480, 480);
+
+        function blit() {
+          const ptr = api.getRgbaPtr();
+          imgData.data.set(Module.HEAPU8.subarray(ptr, ptr + 480 * 480 * 4));
+          ctx.putImageData(imgData, 0, 0);
+        }
+
+        blit();
+        loadingEl.classList.add('hidden');
+
+        const STEP_MS = 1000 / 60;
+        let lastT = performance.now();
+        let accum = 0;
+        let fpsFrames = 0;
+        let fpsT0 = lastT;
+
+        function tick(now) {
+          const dtMs = Math.min(100, now - lastT);
+          lastT = now;
+
+          if (speedMult > 0) {
+            accum += dtMs * speedMult;
+            let steps = 0;
+            const maxSteps = speedMult >= 2 ? 4 : 2;
+            while (accum >= STEP_MS && steps < maxSteps) {
+              api.step(1 / 60);
+              accum -= STEP_MS;
+              steps++;
+            }
+            if (steps > 0) {
+              api.render();
+              blit();
+              fpsFrames++;
+            }
+          }
+
+          if (now - fpsT0 >= 500) {
+            const fps = Math.round((fpsFrames * 1000) / (now - fpsT0));
+            statFps.textContent = speedMult === 0 ? 'PAUSE' : String(fps);
+            statWave.textContent = `RUN #${api.getRun()} · WAVE ${api.getWave()}/50`;
+            fpsFrames = 0;
+            fpsT0 = now;
+          }
+
+          requestAnimationFrame(tick);
+        }
+
+        requestAnimationFrame(tick);
+      }).catch((err) => {
+        console.error(err);
+        loadingMsg.textContent = 'Failed to load WASM: ' + err.message;
+      });
+    })();
+  </script>
+</body>
+</html>
