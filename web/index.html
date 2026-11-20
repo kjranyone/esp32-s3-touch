@@ -91,12 +91,21 @@
       border-color: rgba(112, 226, 244, 0.4);
     }
 
-    /* Bottom floating pill */
-    .dock {
+    /* Bottom chrome: floating pill + credit */
+    .bottom-chrome {
       position: fixed;
-      left: 50%;
+      left: 0;
+      right: 0;
       bottom: max(18px, env(safe-area-inset-bottom));
-      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    .dock {
+      pointer-events: auto;
       display: flex;
       align-items: center;
       gap: 4px;
@@ -107,7 +116,7 @@
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
       box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
-      z-index: 10;
+      max-width: calc(100vw - 24px);
     }
 
     .pill-btn {
@@ -193,9 +202,11 @@
 
     /* Minimal credit */
     .credit {
-      position: fixed;
+      position: absolute;
       right: max(18px, env(safe-area-inset-right));
-      bottom: max(18px, env(safe-area-inset-bottom));
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: auto;
       font-family: var(--mono);
       font-size: 10.5px;
       letter-spacing: 0.04em;
@@ -203,7 +214,6 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      z-index: 5;
     }
 
     .credit a {
@@ -214,17 +224,71 @@
 
     .credit a:hover { color: var(--accent); }
 
-    @media (max-width: 960px) {
+    @media (max-width: 1140px) {
+      .bottom-chrome {
+        flex-direction: column;
+        gap: 8px;
+        bottom: max(12px, env(safe-area-inset-bottom));
+        padding: 0 max(10px, env(safe-area-inset-left)) 0 max(10px, env(safe-area-inset-right));
+      }
       .credit {
-        left: 50%;
+        position: static;
+        top: auto;
         right: auto;
-        bottom: max(68px, calc(env(safe-area-inset-bottom) + 64px));
-        transform: translateX(-50%);
-        white-space: nowrap;
+        transform: none;
+        flex-wrap: wrap;
+        justify-content: center;
         font-size: 10px;
+        gap: 6px;
+        line-height: 1.35;
+        text-align: center;
       }
       .serial-pop {
-        bottom: calc(max(18px, env(safe-area-inset-bottom)) + 88px);
+        bottom: calc(max(12px, env(safe-area-inset-bottom)) + 80px);
+      }
+    }
+
+    @media (max-width: 540px) {
+      .bottom-chrome {
+        gap: 7px;
+        bottom: max(10px, env(safe-area-inset-bottom));
+      }
+      .dock {
+        gap: 2px;
+        padding: 4px;
+        max-width: calc(100vw - 16px);
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .dock::-webkit-scrollbar { display: none; }
+      .pill-btn {
+        font-size: 10px;
+        letter-spacing: 0.04em;
+        padding: 6px 8px;
+      }
+      .pill-sep {
+        height: 14px;
+        margin: 0 1px;
+      }
+      .credit {
+        font-size: 9.5px;
+        gap: 5px;
+      }
+      .serial-pop {
+        bottom: calc(max(10px, env(safe-area-inset-bottom)) + 74px);
+      }
+    }
+
+    @media (max-height: 500px) {
+      .bottom-chrome {
+        gap: 4px;
+        bottom: max(8px, env(safe-area-inset-bottom));
+      }
+      .pill-btn {
+        padding: 5px 9px;
+      }
+      .credit {
+        font-size: 9.5px;
       }
     }
 
@@ -244,15 +308,19 @@
       pointer-events: none;
     }
 
-    body.intro-playing .dock,
+    body.intro-playing .bottom-chrome,
     body.intro-playing .corner-tl,
-    body.intro-playing .corner-tr,
-    body.intro-playing .credit {
+    body.intro-playing .corner-tr {
       opacity: 0;
       pointer-events: none;
     }
 
-    .dock, .corner-tl, .corner-tr, .credit {
+    body.intro-playing .dock,
+    body.intro-playing .credit {
+      pointer-events: none;
+    }
+
+    .bottom-chrome, .corner-tl, .corner-tr {
       transition: opacity 0.55s ease;
     }
 
@@ -297,24 +365,26 @@
     </form>
   </div>
 
-  <nav class="dock" aria-label="View controls">
-    <button class="pill-btn active" data-view="iso">3D</button>
-    <button class="pill-btn" data-view="front">FRONT</button>
-    <button class="pill-btn" data-view="pcb">PCB</button>
-    <span class="pill-sep"></span>
-    <button class="pill-btn" id="btn-speed">1x</button>
-    <button class="pill-btn active" id="btn-sfx" title="Sound Effects">SFX</button>
-    <button class="pill-btn active" id="btn-ir" title="IR Spatial Acoustics (STUDIO / HALL / DRY)">IR</button>
-    <button class="pill-btn" id="btn-uart" title="UART">&gt;_</button>
-  </nav>
+  <div class="bottom-chrome">
+    <nav class="dock" aria-label="View controls">
+      <button class="pill-btn active" data-view="iso">3D</button>
+      <button class="pill-btn" data-view="front">FRONT</button>
+      <button class="pill-btn" data-view="pcb">PCB</button>
+      <span class="pill-sep"></span>
+      <button class="pill-btn" id="btn-speed">1x</button>
+      <button class="pill-btn active" id="btn-sfx" title="Sound Effects">SFX</button>
+      <button class="pill-btn active" id="btn-ir" title="IR Spatial Acoustics (STUDIO / HALL / DRY)">IR</button>
+      <button class="pill-btn" id="btn-uart" title="UART">&gt;_</button>
+    </nav>
 
-  <footer class="credit">
-    <span>Created by Kojiro Tanaka</span>
-    <span>·</span>
-    <a href="https://x.com/mu_sette" target="_blank" rel="noopener">@mu_sette</a>
-    <span>·</span>
-    <a href="https://oto-nari.com" target="_blank" rel="noopener">oto-nari.com</a>
-  </footer>
+    <footer class="credit">
+      <span>Created by Kojiro Tanaka</span>
+      <span>·</span>
+      <a href="https://x.com/mu_sette" target="_blank" rel="noopener">@mu_sette</a>
+      <span>·</span>
+      <a href="https://oto-nari.com" target="_blank" rel="noopener">oto-nari.com</a>
+    </footer>
+  </div>
 
   <div class="veil" id="veil"><div class="pulse"></div></div>
 
