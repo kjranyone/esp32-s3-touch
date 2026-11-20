@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>&lt;esp32-workbench&gt; Embed Example</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #101319; color: #e8f0ff; font-family: ui-monospace, monospace; }
+    esp32-workbench { width: 100vw; height: 100vh; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- Single-tag portable 3D ESP32-S3 hardware sandbox embed -->
+  <esp32-workbench app="oled_pocket" view="iso" intro="0"></esp32-workbench>
+  <script type="module" src="./sim/Esp32WorkbenchElement.js"></script>
+</body>
+</html>

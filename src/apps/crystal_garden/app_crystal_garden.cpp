@@ -1,110 +1,69 @@
 /**
- * web_main.cpp — 『ルミの水晶庭園』v4.0 Web (Emscripten/WASM) デバイスシミュレータ
+ * app_crystal_garden.cpp — 『ルミの水晶庭園 (Crystal Garden)』 Cartridge Entry
  *
- * 実機 (JingCai ESP32-4848S040C_I_Y_3, 480x480 RGB565 + GT911 タッチ) と
- * 同一の C++ ゲームコア (beat.cpp / garden_game.cpp / game_params.cpp) を
- * そのまま WASM 化して HTML5 Canvas 上で実行する。
+ * Implements the universal hw_app.h cartridge interface so the exact same C++
+ * firmware builds for both real ESP32-4848S040C silicon (PlatformIO) and the
+ * 3D Web Hardware Workbench (Emscripten WASM).
  */
 #include <Arduino.h>
-#include <esp_timer.h>
-#include <emscripten.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "hal/hw_hal.h"
+#include "hal/hw_app.h"
 #include "beat.h"
 #include "sfx.h"
 #include "game_params.h"
 #include "garden_game.h"
 
-WebSerial Serial;
+namespace {
 
-extern "C" void web_serial_emit(const char* text)
-{
-    if (!text || !*text) return;
-    EM_ASM({
-        if (typeof window !== 'undefined' && typeof window.onEmulatorSerial === 'function') {
-            window.onEmulatorSerial(UTF8ToString($0));
-        }
-    }, text);
-}
-
-/* ---------------- 480x480 ダブルバッファ & RGBA 出力 ---------------- */
 static constexpr int SCR_W = 480;
-static constexpr int SCR_H = 480;
-static constexpr int SCR_PIXELS = SCR_W * SCR_H;
 
-static uint16_t* canvas[2] = {nullptr, nullptr};
-static uint32_t* rgba_buf = nullptr;
-static uint32_t  rgb565_lut[65536];
-static int render_idx = 0;
-static int scan_idx = 1;
-
-static void init_rgb565_lut()
-{
-    for (uint32_t c = 0; c < 65536; ++c) {
-        uint32_t r = ((c >> 11) & 0x1Fu);
-        uint32_t g = ((c >> 5)  & 0x3Fu);
-        uint32_t b = ( c        & 0x1Fu);
-        r = (r << 3) | (r >> 2);
-        g = (g << 2) | (g >> 4);
-        b = (b << 3) | (b >> 2);
-        /* Little-endian RGBA8888 (ImageData バイト順: R, G, B, A) */
-        rgb565_lut[c] = (0xFFu << 24) | (b << 16) | (g << 8) | r;
-    }
-}
-
-static void convert_to_rgba(const uint16_t* src)
-{
-    uint32_t* dst = rgba_buf;
-    for (int i = 0; i < SCR_PIXELS; ++i) {
-        dst[i] = rgb565_lut[src[i]];
-    }
-}
-
-/* ---------------- UI & ポインタ状態 ---------------- */
-static bool panel_open = false;
-static bool info_peek = false;
-static bool title_confirm = false;
-static int64_t last_save_t = 0;
+/* ---------------- UI & Pointer Gesture State ---------------- */
+static bool    panel_open    = false;
+static bool    info_peek     = false;
+static bool    title_confirm = false;
+static int64_t last_save_t   = 0;
 
 static bool    sw_active = false;
 static int16_t sw_x0 = 0, sw_y0 = 0, sw_dx = 0, sw_dy = 0;
 static int64_t sw_t0 = 0;
 
-/* ---------------- シリアルコマンド保留状態 ---------------- */
-static double   pend_give = 0;
-static bool     pend_give_on = false;
-static uint32_t pend_wave = 0;
-static bool     pend_save = false;
-static bool     pend_heal = false;
-static bool     pend_boss = false;
-static int      pend_bphase = 0;
-static bool     pend_box = false;
-static int      pend_pick_c = -1;
+/* ---------------- Pending UART Debug Commands ---------------- */
+static double   pend_give      = 0;
+static bool     pend_give_on   = false;
+static uint32_t pend_wave      = 0;
+static bool     pend_save      = false;
+static bool     pend_heal      = false;
+static bool     pend_boss      = false;
+static int      pend_bphase    = 0;
+static bool     pend_box       = false;
+static int      pend_pick_c    = -1;
 static int      pend_pick_slot = -1;
-static int      pend_scout = -1;
-static int      pend_charm = -1;
-static bool     pend_ult = false;
-static bool     pend_win = false;
-static bool     pend_gameover = false;
-static bool     pend_ending = false;
+static int      pend_scout     = -1;
+static int      pend_charm     = -1;
+static bool     pend_ult       = false;
+static bool     pend_win       = false;
+static bool     pend_gameover  = false;
+static bool     pend_ending    = false;
 static bool     pend_unlockall = false;
 static bool     pend_hardreset = false;
-static bool     pend_reset = false;
-static bool     pend_title = false;
-static bool     pend_op = false;
-static bool     pend_map = false;
-static bool     pend_status = false;
-static int      pend_go_lane = -1;
-static bool     pend_tap = false;
-static int      pend_tap_x = 0, pend_tap_y = 0;
+static bool     pend_reset     = false;
+static bool     pend_title     = false;
+static bool     pend_op        = false;
+static bool     pend_map       = false;
+static bool     pend_status    = false;
+static int      pend_go_lane   = -1;
+static bool     pend_tap       = false;
+static int      pend_tap_x     = 0, pend_tap_y = 0;
 
 static void handle_tap(int x, int y)
 {
-    /* BOX ボタン (右下): 戦闘中 & マップ画面でいつでも安全に開閉可 */
+    /* BOX button (bottom-right): toggle pause/lootbox panel */
     if (beat::allow_box_button() &&
         x >= beat::BOXBTN_X && x < beat::BOXBTN_X + beat::BOXBTN_W &&
         y >= beat::BOXBTN_Y && y < beat::BOXBTN_Y + beat::BOXBTN_H) {
@@ -139,7 +98,7 @@ static void handle_tap(int x, int y)
     }
 
     if (panel_open) {
-        /* タイトル復帰・ゲームリセット警告ダイアログ表示中 */
+        /* TITLE reset warning dialog */
         if (title_confirm) {
             if (x >= beat::DLG_CANCEL_X && x < beat::DLG_CANCEL_X + beat::DLG_CANCEL_W &&
                 y >= beat::DLG_CANCEL_Y && y < beat::DLG_CANCEL_Y + beat::DLG_CANCEL_H) {
@@ -169,7 +128,7 @@ static void handle_tap(int x, int y)
             return;
         }
 
-        /* [X] 閉じる */
+        /* [X] Close */
         if (x >= beat::CLOSE_X && x < beat::CLOSE_X + beat::CLOSE_W &&
             y >= beat::CLOSE_Y && y < beat::CLOSE_Y + beat::CLOSE_H) {
             sfx::play(sfx::SFX_CANCEL);
@@ -184,7 +143,7 @@ static void handle_tap(int x, int y)
             return;
         }
 
-        /* PAUSED / STATUS 画面の [TITLE] ボタン (リセット警告ダイアログを開く) */
+        /* PAUSED / STATUS -> [TITLE] */
         bool on_status_view = (!game::st.draft_open || info_peek) && (game::st.swap_talent < 0);
         if (on_status_view &&
             x >= beat::TITLEBTN_X && x < beat::TITLEBTN_X + beat::TITLEBTN_W &&
@@ -194,7 +153,7 @@ static void handle_tap(int x, int y)
             return;
         }
 
-        /* PAUSED / STATUS 画面の [SFX:ON/OFF] トグルボタン */
+        /* PAUSED / STATUS -> [SFX:ON/OFF] */
         if (on_status_view &&
             x >= beat::SFXBTN_X && x < beat::SFXBTN_X + beat::SFXBTN_W &&
             y >= beat::SFXBTN_Y && y < beat::SFXBTN_Y + beat::SFXBTN_H) {
@@ -204,7 +163,7 @@ static void handle_tap(int x, int y)
             return;
         }
 
-        /* ヘッダ [STATUS / TO DRAFT / OPEN BOX] */
+        /* Header [STATUS / TO DRAFT / OPEN BOX] */
         if (game::st.swap_talent < 0 &&
             x >= beat::PEEKBTN_X && x < beat::PEEKBTN_X + beat::PEEKBTN_W &&
             y >= beat::PEEKBTN_Y && y < beat::PEEKBTN_Y + beat::PEEKBTN_H) {
@@ -220,7 +179,7 @@ static void handle_tap(int x, int y)
             return;
         }
 
-        /* 満員入替先スロット選択 */
+        /* Party full -> swap slot selection */
         if (game::st.draft_open && game::st.swap_talent >= 0) {
             for (int i = 0; i < game::PARTY_MAX; ++i) {
                 int sx = beat::SWAP_X[i], sy = beat::SWAP_Y;
@@ -245,7 +204,7 @@ static void handle_tap(int x, int y)
             return;
         }
 
-        /* 3択ドラフトカード選択 */
+        /* 3-card draft pick */
         if (game::st.draft_open && !info_peek) {
             for (int c = 0; c < 3; ++c) {
                 int cx = beat::CARD_X[c], cy = beat::CARD_Y;
@@ -273,7 +232,7 @@ static void handle_command_line(char* line)
     if (strcmp(line, "?") == 0 || strcmp(line, "help") == 0) {
         gp::print_all();
         Serial.println("[cmd] give <v> | wave <1..50> | boss | bphase <50|30|10> | box | pick <0..2> [slot] | scout <id> | charm <id>");
-        Serial.println("[cmd] ult | win | heal | gameover | ending | title | op | map | unlockall | hardreset | reset | save | dump");
+        Serial.println("[cmd] ult | win | heal | gameover | ending | title | op | map | go <0..2> | unlockall | hardreset | reset | save | dump");
         return;
     }
     if (strcmp(line, "title") == 0)     { pend_title = true; return; }
@@ -340,14 +299,14 @@ static void apply_pending_commands()
 {
     if (pend_hardreset) {
         pend_hardreset = false;
-        panel_open = false; info_peek = false;
+        panel_open = false; info_peek = false; title_confirm = false;
         game::hard_reset();
         beat::init();
         beat::enter_title();
     }
     if (pend_reset) {
         pend_reset = false;
-        panel_open = false; info_peek = false;
+        panel_open = false; info_peek = false; title_confirm = false;
         game::start_new_run();
         beat::init();
     }
@@ -412,7 +371,7 @@ static void apply_pending_commands()
     if (pend_save) { pend_save = false; game::save(); Serial.println("[game] saved"); }
     if (pend_title) {
         pend_title = false;
-        panel_open = false; info_peek = false;
+        panel_open = false; info_peek = false; title_confirm = false;
         beat::enter_title();
     }
     if (pend_op) {
@@ -436,18 +395,32 @@ static void apply_pending_commands()
     }
 }
 
-extern "C" {
+} // anonymous namespace
 
-EMSCRIPTEN_KEEPALIVE
-void emu_init()
+namespace hw {
+
+const AppInfo& app_info()
 {
-    init_rgb565_lut();
-    canvas[0] = (uint16_t*)calloc(SCR_PIXELS, sizeof(uint16_t));
-    canvas[1] = (uint16_t*)calloc(SCR_PIXELS, sizeof(uint16_t));
-    rgba_buf  = (uint32_t*)calloc(SCR_PIXELS, sizeof(uint32_t));
+    static const AppInfo kInfo = {
+        "crystal_garden",
+        "Crystal Garden",
+        "esp32_4848s040c",
+        480,
+        480,
+        false,
+    };
+    return kInfo;
+}
 
-    Serial.println("== Crystal Garden v4.0: 50-Wave Roguelite (Web Simulator) ==");
-    Serial.println("Target Hardware: JingCai ESP32-4848S040C_I_Y_3 (480x480 RGB565 / GT911)");
+void app_init()
+{
+    panel_open = false;
+    info_peek = false;
+    title_confirm = false;
+    sw_active = false;
+
+    Serial.println("== Crystal Garden v4.0: 50-Wave Roguelite ==");
+    Serial.println("Cartridge: apps/crystal_garden (ESP32-4848S040C 480x480 RGB565 / GT911 / NS4168)");
 
     sfx::init();
     game::init();
@@ -455,23 +428,12 @@ void emu_init()
     beat::set_wave(game::st.wave_reached ? game::st.wave_reached : 1);
     beat::enter_title();
     game::save();
-
-    beat::render(canvas[1] + 56 * SCR_W, 1);
-    beat::render_hud(canvas[1], 1);
-    convert_to_rgba(canvas[1]);
-    scan_idx = 1;
-    render_idx = 0;
-    last_save_t = esp_timer_get_time();
-
-    Serial.println("Setup done. Type 'help' or '?' for serial commands.");
+    last_save_t = hw::micros();
+    Serial.println("Setup done. Type 'help' or '?' for UART commands.");
 }
 
-EMSCRIPTEN_KEEPALIVE
-void emu_step(float dt_sec)
+void app_step(float dt_sec)
 {
-    if (dt_sec <= 0.0f) dt_sec = 0.0166667f;
-    if (dt_sec > 0.2f) dt_sec = 0.2f;
-
     apply_pending_commands();
     game::tick(dt_sec);
     if (!panel_open) {
@@ -485,149 +447,83 @@ void emu_step(float dt_sec)
         beat::request_full_restore();
     }
 
-    int64_t now = esp_timer_get_time();
+    int64_t now = hw::micros();
     if (now - last_save_t >= 30000000LL) {
         last_save_t = now;
         game::save();
     }
 }
 
-EMSCRIPTEN_KEEPALIVE
-void emu_render()
+void app_render(uint16_t* fb_rgb565, int buf_idx)
 {
-    uint16_t* target = canvas[render_idx];
-    beat::render(target + 56 * SCR_W, render_idx);
-    beat::render_hud(target, render_idx);
-    beat::render_panel(target, panel_open, info_peek, render_idx, title_confirm);
-
-    convert_to_rgba(target);
-    scan_idx = render_idx;
-    render_idx ^= 1;
+    beat::render(fb_rgb565 + 56 * SCR_W, buf_idx);
+    beat::render_hud(fb_rgb565, buf_idx);
+    beat::render_panel(fb_rgb565, panel_open, info_peek, buf_idx, title_confirm);
 }
 
-EMSCRIPTEN_KEEPALIVE
-uint8_t* emu_get_rgba_ptr()
+void app_on_touch(int event_type, int x, int y)
 {
-    return reinterpret_cast<uint8_t*>(rgba_buf);
-}
+    if (event_type == TOUCH_DOWN) {
+        sw_x0 = (int16_t)x;
+        sw_y0 = (int16_t)y;
+        sw_dx = 0;
+        sw_dy = 0;
+        sw_t0 = hw::micros();
+        sw_active = true;
+    } else if (event_type == TOUCH_MOVE) {
+        if (!sw_active) return;
+        sw_dx = (int16_t)(x - sw_x0);
+        sw_dy = (int16_t)(y - sw_y0);
+    } else if (event_type == TOUCH_UP) {
+        if (!sw_active) return;
+        sw_dx = (int16_t)(x - sw_x0);
+        sw_dy = (int16_t)(y - sw_y0);
+        sw_active = false;
 
-EMSCRIPTEN_KEEPALIVE
-void emu_pointer_down(int x, int y)
-{
-    if (x < 0) x = 0;
-    if (x >= SCR_W) x = SCR_W - 1;
-    if (y < 0) y = 0;
-    if (y >= SCR_H) y = SCR_H - 1;
-    sw_x0 = (int16_t)x;
-    sw_y0 = (int16_t)y;
-    sw_dx = 0;
-    sw_dy = 0;
-    sw_t0 = esp_timer_get_time();
-    sw_active = true;
-}
-
-EMSCRIPTEN_KEEPALIVE
-void emu_pointer_move(int x, int y)
-{
-    if (!sw_active) return;
-    sw_dx = (int16_t)(x - sw_x0);
-    sw_dy = (int16_t)(y - sw_y0);
-}
-
-EMSCRIPTEN_KEEPALIVE
-void emu_pointer_up(int x, int y)
-{
-    if (!sw_active) return;
-    sw_dx = (int16_t)(x - sw_x0);
-    sw_dy = (int16_t)(y - sw_y0);
-    sw_active = false;
-
-    int64_t dt_ms = (esp_timer_get_time() - sw_t0) / 1000;
-    if (!panel_open && !beat::is_modal_director() &&
-        dt_ms < 2000 && abs(sw_dy) > 60 && abs(sw_dy) > 2 * abs(sw_dx) &&
-        sw_y0 > 56 && sw_y0 < 408) {
-        game::pet_trigger();
-        beat::on_pet();
-        char msg[24];
-        snprintf(msg, sizeof(msg), "PET! +%d%%", (int)gp::g.pet_buff_pct);
-        beat::flash_message(msg, 45);
-    } else if (abs(sw_dy) <= 60) {
-        handle_tap(sw_x0, sw_y0);
+        int64_t dt_ms = (hw::micros() - sw_t0) / 1000;
+        if (!panel_open && !beat::is_modal_director() &&
+            dt_ms < 2000 && abs(sw_dy) > 60 && abs(sw_dy) > 2 * abs(sw_dx) &&
+            sw_y0 > 56 && sw_y0 < 408) {
+            game::pet_trigger();
+            beat::on_pet();
+            char msg[24];
+            snprintf(msg, sizeof(msg), "PET! +%d%%", (int)gp::g.pet_buff_pct);
+            beat::flash_message(msg, 45);
+        } else if (abs(sw_dy) <= 60) {
+            handle_tap(sw_x0, sw_y0);
+        }
+        sw_dx = 0;
+        sw_dy = 0;
     }
-    sw_dx = 0;
-    sw_dy = 0;
 }
 
-EMSCRIPTEN_KEEPALIVE
-void emu_trigger_pet()
+void app_on_uart(const char* line)
 {
-    if (panel_open || beat::is_modal_director()) return;
-    game::pet_trigger();
-    beat::on_pet();
-    char msg[24];
-    snprintf(msg, sizeof(msg), "PET! +%d%%", (int)gp::g.pet_buff_pct);
-    beat::flash_message(msg, 45);
-}
-
-EMSCRIPTEN_KEEPALIVE
-void emu_send_command(const char* cmd)
-{
-    if (!cmd) return;
+    if (!line) return;
     char buf[128];
-    strncpy(buf, cmd, sizeof(buf) - 1);
+    strncpy(buf, line, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
-    Serial.printf("> %s\n", buf);
     handle_command_line(buf);
 }
 
-EMSCRIPTEN_KEEPALIVE
-void emu_save()
+void app_on_save()
 {
     game::save();
 }
 
-EMSCRIPTEN_KEEPALIVE
-uint32_t emu_get_wave() { return beat::wave(); }
-
-EMSCRIPTEN_KEEPALIVE
-uint32_t emu_get_run() { return game::st.run_number; }
-
-static float audio_f32_buf[2048];
-
-EMSCRIPTEN_KEEPALIVE
-void emu_audio_set_rate(int hz)
+void app_on_status_log(uint32_t fps)
 {
-    sfx::set_sample_rate((uint32_t)(hz > 0 ? hz : 44100));
+    char b1[24];
+    Serial.printf("[beat] fps=%u run=%u wave=%u/50 party=%d crystals=%s hp0=%.0f/%.0f rage=%.0f/%.0f/%.0f\r\n",
+                  (unsigned)fps, (unsigned)game::st.run_number, (unsigned)beat::wave(),
+                  game::party_count(), game::fmt(game::st.crystals, b1, sizeof(b1)),
+                  beat::ally_hp(0), beat::ally_hpmax(0),
+                  beat::ally_rage(0), beat::ally_rage(1), beat::ally_rage(2));
 }
 
-EMSCRIPTEN_KEEPALIVE
-float* emu_audio_render(int frames)
-{
-    if (frames < 0) frames = 0;
-    if (frames > 2048) frames = 2048;
-    sfx::render_f32(audio_f32_buf, frames);
-    return audio_f32_buf;
-}
+void app_audio_set_rate(uint32_t hz) { sfx::set_sample_rate(hz); }
+void app_audio_render(float* out_f32, int frames) { sfx::render_f32(out_f32, frames); }
+void app_audio_set_muted(bool muted) { sfx::set_muted(muted); }
+bool app_audio_is_muted() { return sfx::is_muted(); }
 
-EMSCRIPTEN_KEEPALIVE
-void emu_sfx_set_muted(int muted)
-{
-    sfx::set_muted(muted != 0);
-}
-
-EMSCRIPTEN_KEEPALIVE
-int emu_sfx_is_muted()
-{
-    return sfx::is_muted() ? 1 : 0;
-}
-
-EMSCRIPTEN_KEEPALIVE
-void emu_sfx_play(int id)
-{
-    if (id >= 0 && id < sfx::SFX_COUNT) sfx::play((sfx::Id)id);
-}
-
-EMSCRIPTEN_KEEPALIVE
-int emu_get_party_count() { return game::party_count(); }
-
-} // extern "C"
+} // namespace hw
